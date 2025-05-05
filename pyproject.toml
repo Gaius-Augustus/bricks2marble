@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bricks2marble"
+version = "0.0.1"
+authors = [
+  { name="Richard Krieg", email="irkri@irkri.net" },
+]
+description = "Pre- and postprocessing tools for deep learning genome seq2seq models in Python."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = ["numpy", "pydantic"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/gaius-augustus/bricks2marble"
+Issues = "https://github.com/gaius-augustus/bricks2marble/issues"
