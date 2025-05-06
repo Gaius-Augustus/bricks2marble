@@ -1,0 +1,300 @@
+from pathlib import Path
+from typing import Callable, Literal
+
+import numpy as np
+
+from .struct import FASTA, Annotation, GTFEntry, Region
+
+HMM_STATE_AGGREGATION = np.array([
+    [1., 0., 0., 0., 0.],
+    [0., 1., 0., 0., 0.],
+    [0., 1., 0., 0., 0.],
+    [0., 1., 0., 0., 0.],
+    [0., 0., 1., 0., 0.],
+    [0., 0., 0., 1., 0.],
+    [0., 0., 0., 0., 1.],
+    [0., 0., 1., 0., 0.],
+    [0., 0., 0., 1., 0.],
+    [0., 0., 0., 0., 1.],
+    [0., 0., 1., 0., 0.],
+    [0., 0., 0., 0., 1.],
+    [0., 0., 1., 0., 0.],
+    [0., 0., 0., 1., 0.],
+    [0., 0., 0., 0., 1.],
+])
+
+
+def reduce_hmm_state_labels(arr: np.ndarray) -> np.ndarray:
+    new_arr = HMM_STATE_AGGREGATION.argmax(1)[arr]
+    new_arr[(new_arr > 1)] = 2
+    return new_arr
+
+
+def split_regions(
+    encoded_labels: np.ndarray,
+    offset: int = 0,
+) -> list[Region]:
+    arr = np.array(encoded_labels)
+    arr = reduce_hmm_state_labels(arr)
+    change_points = np.where(np.diff(arr) != 0)[0]
+    start_points = np.insert(change_points + 1, 0, 0)
+    end_points = np.append(change_points, arr.size - 1)
+
+    features = ["intergenic", "intron", "CDS"]
+    regions = [
+        Region(
+            name=features[arr[start]],
+            start=start+offset,
+            end=end+offset,
+        )
+        for start, end in zip(start_points, end_points)
+    ]
+
+    return regions
+
+
+def get_tx_from_range(
+    regions: list[Region],
+) -> tuple[list[Region], list[list[Region]], list[Region]]:
+    """Extracts transcript regions from a given tuples of class regions.
+    It extracts for each transcript the regions of their CDS.
+    Additionally, it reports fragmented txs add the start or end of the
+    input ranges.
+
+    Args:
+        regions (list[Region]): A sequence of regions, classifying parts
+            of a genome sequence into different labels.
+
+    Returns:
+        initial_tx (list): List of exon ranges of the first fragmented
+            transcript.
+        txs (list of lists): List of transcripts with their CDS ranges.
+        current_tx (list): Last fragmented Transcript
+    """
+    initial_tx: list[Region] = []
+    txs: list[list[Region]] = []
+    current_tx: list[Region] = []
+
+    for region in regions:
+        if region.name == 'intergenic':
+            if current_tx:
+                txs.append(current_tx)
+                current_tx = []
+        else:
+            current_tx.append(region)
+    if regions[0].name != 'intergenic' and txs:
+        initial_tx = txs[0]
+        txs = txs[1:]
+    return initial_tx, txs, current_tx
+
+
+def merge_re_prediction(
+    all_tx: list[list[Region]],
+    new_tx: list[list[Region]],
+    breakpoint: int,
+) -> list[list[Region]]:
+    """Merges two sets of transcript predictions (`all_tx` and `new_tx`)
+    at a specified breakpoint.
+
+    This function integrates predictions from two different prediction
+    sets by considering their overlaps and the specified breakpoint. It
+    aims to create a combined prediction that respects the continuity of
+    transcripts across the breakpoint, favoring the retention of longer
+    transcripts or more accurate predictions based on the overlap
+    analysis.
+
+    Arguments:
+        all_tx (list of tuples): The list of all current transcript
+            predictions before the breakpoint. Each element in the list
+            is a tuple representing a transcript with its start and end
+            positions.
+        new_tx (list of tuples): The list of new transcript predictions
+            that may overlap with `all_tx` at the breakpoint.
+        breakpoint (int): The position in the sequence where the
+            division between the old and new predictions is made.
+
+    Returns:
+        list[Region]: The merged list of transcript predictions,
+            considering the breakpoint and overlaps between `all_tx`
+            and `new_tx`.
+
+    The merging process follows these rules:
+        - If one of the prediction sets is empty, it returns the
+            concatenation of both.
+        - If the breakpoint is in the intergenic region (outside the
+            range of any transcripts in both sets), it merges the
+            predictions without overlapping transcripts.
+        - If the breakpoint indicates overlapping regions but no direct
+            overlap between transcripts, it concatenates the predictions
+            up to and from the breakpoint.
+        - If there's an overlap and one of the transcripts surrounding
+            the breakpoint is larger, the larger transcript is preferred
+            in the merged output.
+    """
+    overlap1 = 0
+    for i, tx in enumerate(all_tx):
+        if breakpoint < tx[0].start:
+            break
+        overlap1 = i
+    overlap2 = 0
+    for i, tx in enumerate(new_tx):
+        if breakpoint < tx[0].start:
+            break
+        overlap2 = i
+
+    if not all_tx or not new_tx:
+        # no tx in one of the predictions
+        return all_tx + new_tx
+    elif (breakpoint > all_tx[overlap1][-1].end
+            and breakpoint > new_tx[overlap2][-1].end):
+        # breakpoint already in intergenic region of both sets
+        return all_tx[:overlap1+1] + new_tx[overlap2+1:]
+    elif all_tx[overlap1][-1].end < new_tx[overlap2][0].start:
+        # breakpoint in one of the transcripts but they don't overlap
+        return all_tx[:overlap1+1] + new_tx[overlap2:]
+    elif (all_tx[overlap1][-1].end - all_tx[overlap1][0].start
+            > new_tx[overlap2][-1].end - new_tx[overlap2][0].start):
+        # tx from all_tx is larger so keep it instead of the one from new_tx
+        return all_tx[:overlap1+1] + new_tx[overlap2+1:]
+    else:
+        # tx from new_tx is larger so keep it instead of the one from all_tx
+        return all_tx[:overlap1] + new_tx[overlap2:]
+
+
+def GTF_from_model(
+    fasta: FASTA,
+    predict_func: Callable[[FASTA], np.ndarray],
+    file: Path | str = "out.gtf",
+    strand: Literal["+", "-"] = "+",
+    tx_id: int = 0,
+    filter_transcripts: bool = True,
+) -> tuple[Annotation, int]:
+    labels = predict_func(fasta)
+
+    annotation = Annotation(file, f'anno')
+    ranges: dict[str, list[list[Region]]] = {}
+
+    repred_in = []
+    repred_index = []
+    repred_coords = []
+
+    for i in range(labels.shape[0]-1):
+        if (fasta.coords[i].name == fasta.coords[i+1].name and
+            labels[i, -1] != labels[i+1, 0]
+        ):
+            repred_in.append(np.concatenate(
+                (fasta.sequences[i], fasta.sequences[i+1]),
+                axis=0,
+            ))
+            repred_index.append(i)
+            repred_coords.append(fasta.coords[i])
+            repred_coords.append(fasta.coords[i+1])
+
+    repred_in = np.array(repred_in)
+    if repred_in.size > 0:
+        print(f"{repred_in.shape=}")
+        repred_out = predict_func(FASTA(repred_in, repred_coords))
+
+    re_txs = None
+    end_fragment = []
+
+    for i, (y, c) in enumerate(zip(labels, fasta.coords)):
+        regions = split_regions(y, c.start)
+        is_ir = 'intergenic' in [r.name for r in regions]
+        coord_diff = 0 if i == 0 else (c.end - fasta.coords[i-1].start)
+        start_fragment, txs, new_end_fragment = get_tx_from_range(regions)
+
+        if c.name not in ranges:
+            ranges[c.name] = []
+
+        # if the start of the first fragmented tx matches the fragment
+        # from the last chunk, combine them
+        if (not re_txs and is_ir and end_fragment and start_fragment
+                and labels[i-1, -1] == labels[i, 0]):
+            end_fragment[-1].start = start_fragment[0].start
+            end_fragment += start_fragment[1:]
+            ranges[c.name] += [end_fragment]
+
+        if is_ir and txs:
+            if re_txs:
+                ranges[c.name] = merge_re_prediction(
+                    ranges[c.name],
+                    txs,
+                    c.start + coord_diff//2,
+                )
+            else:
+                ranges[c.name] += txs
+        if is_ir:
+            end_fragment = new_end_fragment
+
+        re_txs = None
+        if repred_index and i == repred_index[0]:
+            repred_index.pop(0)
+            c_re = Region(
+                name=c.name,
+                start=c.start,
+                end=c.end+coord_diff,
+                strand=strand,  # unsure
+            )
+            current_re = repred_out[0]
+            repred_out = repred_out[1:]
+            if c_re.strand == '-':
+                current_re = current_re[::-1]
+            re_ranges = split_regions(current_re, c_re.start)
+            start_fragment, re_txs, new_end_fragment = get_tx_from_range(
+                re_ranges
+            )
+
+            if (not is_ir and end_fragment and start_fragment \
+                    and labels[i-1,-1] == current_re[0]):
+                end_fragment[-1].end = start_fragment[0].end
+                end_fragment += start_fragment[1:]
+                ranges[c.name] += [end_fragment]
+            if re_txs:
+                ranges[c.name] = merge_re_prediction(
+                    ranges[c.name],
+                    re_txs,
+                    c_re.end + coord_diff//2,
+                )
+
+            end_fragment = new_end_fragment
+
+    for seq in ranges:
+        phase = -1
+        for tx in ranges[seq]:
+            tx_id += 1
+            t_id = f'g{tx_id}.t1'
+            g_id = f'g{tx_id}'
+            phase = 0
+            annotation.transcript_update(t_id, g_id, seq, strand)
+            annotation.genes_update(g_id, t_id)
+            for r in tx:
+                annotation.transcripts[t_id].add_line(GTFEntry(
+                    seqname=seq,
+                    source='Tiberius',
+                    feature=r.name,
+                    start=r.start,
+                    end=r.end,
+                    score='.',
+                    strand=strand,
+                    frame=str(phase),  # type: ignore
+                    attributes=f'gene_id "{g_id}"; transcript_id "{t_id}";',
+                ))
+                if r.name == 'CDS':
+                    phase = (3 - (r.end - r.start + 1 - phase) % 3) % 3
+
+    remove_tx = []
+    for tx in annotation.transcripts.values():
+        tx.check_splits()
+        if filter_transcripts and tx.get_cds_len() < 201:
+            remove_tx.append(tx.id)
+        else:
+            tx.redo_phase()
+
+    for tx in remove_tx:
+        annotation.transcripts.pop(tx)
+
+    annotation.norm_tx_format()
+    annotation.find_genes()
+
+    return annotation, tx_id

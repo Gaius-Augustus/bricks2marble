@@ -1,4 +1,6 @@
 import numpy as np
+from pydantic import BaseModel
+from typing import Literal
 
 MAP = {
     "A": 0, "C": 1, "G": 2, "T": 3, "N": 4,
@@ -17,15 +19,27 @@ ENCODING = np.array([
 ])
 
 
+class Coordinate(BaseModel):
+
+    name: str
+    start: int
+    end: int
+
+
+class Region(Coordinate):
+
+    strand: Literal["+", "-"] = "+"
+
+
 class FASTA:
 
     def __init__(
         self,
         sequences: np.ndarray,
-        choords: list[tuple[str, int, int]],
+        coords: list[Coordinate],
     ) -> None:
         self.sequences = sequences
-        self.choords = choords
+        self.coords = coords
         self.repeat_masking = np.any(sequences > 4)
 
     @property
@@ -35,6 +49,39 @@ class FASTA:
     @property
     def T(self) -> int:
         return self.sequences.shape[1]
+
+    def resample(self, T: int, /, pad: int = -1) -> "FASTA":
+        sequences = []
+        new_coords = []
+
+        file_data = {}
+        for row, c in zip(self.sequences, self.coords):
+            valid_len = c.end - c.start + 1
+            data = row[:valid_len]
+            if c.name not in file_data:
+                file_data[c.name] = []
+            file_data[c.name].extend(data)
+
+        for seq, values in file_data.items():
+            total = len(values)
+            num_chunks = (total + T - 1) // T
+
+            for i in range(num_chunks):
+                chunk_start = i * T
+                chunk_end = min((i + 1) * T, total)
+                chunk = values[chunk_start:chunk_end]
+
+                if len(chunk) < T:
+                    chunk += [pad] * (T - len(chunk))
+
+                sequences.append(chunk)
+                new_coords.append(Coordinate(
+                    name=seq,
+                    start=chunk_start+1,
+                    end=chunk_end,
+                ))
+
+        return FASTA(np.array(sequences), new_coords)
 
     def one_hot(self, sequences: np.ndarray | None = None) -> np.ndarray:
         seq = self.sequences if sequences is None else sequences
@@ -70,15 +117,56 @@ class FASTA:
         start: int | None = None,
         end: int | None = None,
         /,
-        output_repeat_masked: bool = False,
-    ) -> np.ndarray:
+        pad: int = -1,
+    ) -> "FASTA":
         if end is None:
             if start is None:
                 start, end = 0, -1
             else:
                 end = start
                 start = 0
-        sequences = self.sequences.reshape(-1)[start:end]
-        if not output_repeat_masked:
-            sequences[sequences > 4] = sequences[sequences > 4] - 5
-        return sequences
+
+        flat_numbers = []
+        flat_positions = []
+
+        global_index = 0
+        for row, c in zip(self.sequences, self.coords):
+            valid_len = c.end - c.start + 1
+            for i in range(valid_len):
+                if start <= global_index < end:  # type: ignore
+                    flat_numbers.append(row[i])
+                    flat_positions.append((c.name, start + i))  # type: ignore
+                global_index += 1
+            if global_index >= end:
+                break
+
+        grouped = {}
+        for (seq, idx), val in zip(flat_positions, flat_numbers):
+            if seq not in grouped:
+                grouped[seq] = []
+            grouped[seq].append((idx, val))
+
+        new_seqs = []
+        new_coords = []
+
+        for seq, (positions, values) in grouped.items():
+            total = len(values)
+            num_chunks = (total + self.T - 1) // self.T
+
+            for i in range(num_chunks):
+                chunk_vals = list(values[i*self.T:(i+1)*self.T])
+                chunk_pos = list(positions[i*self.T:(i+1)*self.T])
+
+                if len(chunk_vals) < self.T:
+                    chunk_vals += [-1] * (self.T - len(chunk_vals))
+
+                new_seqs.append(chunk_vals)
+                new_coords.append(
+                    Coordinate(
+                        name=seq,
+                        start=chunk_pos[0] + 1,
+                        end=chunk_pos[-1] + 1,
+                    ) if chunk_pos else Coordinate(name=seq, start=-1, end=-1)
+                )
+
+        return FASTA(np.array(new_seqs), new_coords)

@@ -58,7 +58,7 @@ def test_fasta(fasta_path: Path) -> None:
         ])
     )
 
-    assert fasta.choords == [
+    assert fasta.coords == [
         ("name abc", 1, 5),
         ("name abc", 6, 10),
         ("name abc", 11, 15),

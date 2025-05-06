@@ -2,7 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..struct.fasta import ENCODING, FASTA, MAP
+from ..struct.fasta import ENCODING, FASTA, MAP, Region
 
 
 def load_fasta(
@@ -45,17 +45,17 @@ def load_fasta(
     del sequences
 
     all_sequences = []
-    choords: list[tuple[str, int, int]] = []
+    coords: list[Region] = []
     for k, seq in enumerate(sequences_):
         N, left = divmod(len(seq) - overlap, T - overlap)
         enc = np.zeros((N + int(left>0), T), dtype=np.int8)
         T_sample = T - overlap
         for i in range(N):
             enc[i, :] = seq[i * T_sample : i * T_sample + T]
-            choords.append((
-                name_sequences[k],
-                i * T_sample + 1,
-                i * T_sample + T
+            coords.append(Region(
+                name=name_sequences[k],
+                start=i * T_sample + 1,
+                end=i * T_sample + T,
             ))
         if left > 0:
             surplus = left + overlap
@@ -63,11 +63,11 @@ def load_fasta(
                 raise RuntimeError("Dataset creation failed")
             enc[-1, :surplus] = seq[-surplus:]
             enc[-1, surplus:] = pad
-            choords.append((
-                name_sequences[k],
-                N * T_sample + 1,
-                N * T_sample + surplus,
+            coords.append(Region(
+                name=name_sequences[k],
+                start=N * T_sample + 1,
+                end=N * T_sample + surplus,
             ))
         all_sequences.append(enc)
 
-    return FASTA(np.concatenate(all_sequences, 0), choords)
+    return FASTA(np.concatenate(all_sequences, 0), coords)
