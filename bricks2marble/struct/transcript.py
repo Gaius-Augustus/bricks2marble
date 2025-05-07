@@ -1,30 +1,20 @@
-import sys
 from typing import Literal
 
-from pydantic import BaseModel
+from .fasta import Region
 
 
-class NotGTFFormat(Exception):
+class GTFEntry(Region):
 
-    ...
-
-
-class GTFEntry(BaseModel):
-
-    seqname: str
     source: str
     feature: str
-    start: int
-    end: int
     score: int | Literal["."]
-    strand: Literal["+", "-"]
     frame: Literal["0", "1", "2", "."]
     attributes: str
 
     @staticmethod
     def from_list(line: list[str]) -> "GTFEntry":
         return GTFEntry(
-            seqname=line[0],
+            name=line[0],
             source=line[1],
             feature=line[2],
             start=int(line[3]),
@@ -35,18 +25,36 @@ class GTFEntry(BaseModel):
             attributes=line[8],
         )
 
+    def to_list(self) -> list[str | int]:
+        return [
+            self.name,
+            self.source,
+            self.feature,
+            self.start,
+            self.end,
+            self.score,
+            self.strand,
+            self.frame,
+            self.attributes,
+        ]
+
+    def __eq__(self, other) -> bool:
+        if isinstance(other, GTFEntry):
+            return super().__eq__(other)
+        raise NotImplementedError("Can only compare GTFEntry to GTFEntry type")
+
 
 class Transcript:
-    """Class handling the data structures and methods for a transcript.
+    """Class representing a transcript of a genome.
 
     Args:
-        id (str): Transcript ID
-        gene_id (str): Gene ID
-        chr (str): Chromosome or sequence name where the transcript is
-            located.
-        annotation (str): ID of the source annotation.
-        strand (str): Strand (+/-) on which the transctipt is located.
-            Defaults to +.
+        id (str): The identifier of the transcript.
+        gene_id (str): The identifier of the gene the transcript is
+            synthesized from.
+        chr (str): The name of the sequence or chromosome the transcript
+            is coming from.
+        strand (str, optional): Strand (+/-) on which the transctipt is
+            located. Defaults to +.
     """
 
     def __init__(
@@ -54,41 +62,30 @@ class Transcript:
         id: str,
         gene_id: str,
         chr: str,
-        annotation: str,
         strand: Literal["+", "-"] = "+",
     ) -> None:
         self.id = id
         self.chr = chr
         self.gene_id = gene_id
-        self.transcript_lines: dict[str, list[GTFEntry]] = {}
-        self.gtf = []
-        self.source_anno = annotation
+        self.entries: dict[str, list[GTFEntry]] = {}
         self.start = -1
         self.end = -1
         self.cds_len = -1
-        self.cds_coords = {}
         self.strand: Literal["+", "-"] = strand
-        self.source_method = ''
+        self.source = ""
 
-    def add_line(self, line: GTFEntry | list[str]) -> None:
-        """Add a single line from the gtf file to the transcript data
-        structure.
-
-        Args:
-            line (list): List of all elements of a line from a gtf file.
-        """
-        entry = GTFEntry.from_list(line) if isinstance(line, list) else line
-        if not (entry.seqname == self.chr or entry.strand == self.strand):
-            raise NotGTFFormat(
+    def add(self, entry: GTFEntry | list[str]) -> None:
+        """Add a :class:`GTFEntry` object to the transcript."""
+        entry = GTFEntry.from_list(entry) if isinstance(entry, list) else entry
+        if not (entry.name == self.chr or entry.strand == self.strand):
+            raise RuntimeError(
                 "File is not in gtf format. "
                 f"Error in line {entry}\n"
                 "Transcript ID is not unique"
             )
 
-        if entry.feature not in self.transcript_lines.keys():
-            self.transcript_lines.update({entry.feature : []})
-
-        self.source_method = entry.source
+        if entry.feature not in self.entries:
+            self.entries[entry.feature] = []
 
         if self.start < 0 or entry.start < self.start:
             self.start = entry.start
@@ -100,27 +97,30 @@ class Transcript:
                 'gene_id "'
             )[1].split('";')[0]
 
-        self.transcript_lines[entry.feature].append(entry)
+        self.entries[entry.feature].append(entry)
+        self.source = entry.source
 
-    def coords_per_frame(
-        self,
-        type: str,
-    ) -> dict[str, list[tuple[int, int]]]:
-        """Get the coordinates and reading frame of the coding regions.
+    def coords_per_frame(self, type: str) -> dict[str, list[tuple[int, int]]]:
+        """Get the coordinates of the regions of given type per reading
+        frame.
 
+        Args:
+            type (str): The type of feature to extract from the
+                transcript.
         Returns:
-            dict[list[list[int]]]: Dictionary with list of type coords
-                for each frame phase (0, 1, 2).
+            dict[str,list[tuple[int,int]]]: Dictionary mapping frame
+                phases (0, 1, 2) to a list of integer ranges ``(start,
+                end)`` of the entries in the transcript with the given
+                type.
         """
-
         coords = {'0' : [], '1' : [], '2' : [], '.' : []}
 
-        if type == 'CDS' and type not in self.transcript_lines.keys():
+        if type == 'CDS' and type not in self.entries.keys():
             type = 'exon'
-        if type not in self.transcript_lines.keys():
+        if type not in self.entries.keys():
             return coords
 
-        for entry in self.transcript_lines[type]:
+        for entry in self.entries[type]:
             coords[entry.frame].append([entry.start, entry.end])
 
         for k in coords.keys():
@@ -132,14 +132,23 @@ class Transcript:
         return coords
 
     def coords(self, type: str) -> list[tuple[int, int]]:
-        coords = []
+        """Get the coordinates of the regions of given type.
 
-        if type == 'CDS' and type not in self.transcript_lines.keys():
+        Args:
+            type (str): The type of feature to extract from the
+                transcript.
+        Returns:
+            list[tuple[int,int]]: List of integer ranges ``(start,
+                end)`` of the entries in the transcript with the given
+                type.
+        """
+        coords = []
+        if type == 'CDS' and type not in self.entries.keys():
             type = 'exon'
-        if type not in self.transcript_lines.keys():
+        if type not in self.entries.keys():
             return coords
 
-        for entry in self.transcript_lines[type]:
+        for entry in self.entries[type]:
             coords.append([entry.start, entry.end])
 
         coords.sort(key=lambda c: (c[0], c[1]))
@@ -153,23 +162,22 @@ class Transcript:
         """Get the coordinates and reading frame of the coding regions
 
         Returns:
-            dict[str, list[list[int]]]: Dictionary with list of CDS
+            dict[str,list[list[int]]]: Dictionary with list of CDS
                 coords for each each frame phase (0, 1, 2).
         """
-        if not self.cds_coords.keys():
-            self.cds_coords = {'0' : [], '1' : [], '2' : []}
+        cds_coords = {'0' : [], '1' : [], '2' : []}
 
-            if 'CDS' in self.transcript_lines.keys():
-                key = 'CDS'
-            else:
-                key = 'exon'
+        if 'CDS' in self.entries.keys():
+            key = 'CDS'
+        else:
+            key = 'exon'
 
-            for entry in self.transcript_lines[key]:
-                self.cds_coords[entry.frame].append([entry.start, entry.end])
-            for k in self.cds_coords.keys():
-                self.cds_coords[k].sort(key=lambda c: (c[0], c[1]))
+        for entry in self.entries[key]:
+            cds_coords[entry.frame].append([entry.start, entry.end])
+        for k in cds_coords.keys():
+            cds_coords[k].sort(key=lambda c: (c[0], c[1]))
 
-        return self.cds_coords
+        return cds_coords
 
     def add_missing_lines(self) -> bool:
         """Add transcript, intron, CDS, exon coordinates if they were
@@ -187,33 +195,30 @@ class Transcript:
 
     def check_cds_exons(self) -> bool:
         """Check if the transcript has CDS or exons."""
-        if ('CDS' not in self.transcript_lines.keys()
-                and 'exon' not in self.transcript_lines.keys()):
-            sys.stderr.write(
-                f'Skipping transcript {self.id}, no CDS nor exons'
-            )
+        if ('CDS' not in self.entries and 'exon' not in self.entries):
+            print(f'Skipping transcript {self.id}, no CDS nor exons')
             return False
         return True
 
     def find_introns(self) -> None:
         """Add intron lines."""
-        if not 'intron' in self.transcript_lines.keys():
-            self.transcript_lines.update({'intron' : []})
+        if 'intron' not in self.entries:
+            self.entries.update({'intron' : []})
             key = ''
 
-            if 'CDS' in self.transcript_lines.keys():
+            if 'CDS' in self.entries.keys():
                 key = 'CDS'
-            elif 'exon' in self.transcript_lines.keys():
+            elif 'exon' in self.entries.keys():
                 key = 'exon'
 
             if key:
                 exon_lst: list[GTFEntry] = []
-                for line in self.transcript_lines[key]:
+                for line in self.entries[key]:
                     exon_lst.append(line)
-                exon_lst = sorted(exon_lst, key=lambda e: e.seqname)
+                exon_lst = sorted(exon_lst, key=lambda e: e.name)
                 for i in range(1, len(exon_lst)):
                     intron = GTFEntry(
-                        seqname=exon_lst[i].seqname,
+                        name=exon_lst[i].name,
                         source=exon_lst[i].source,
                         feature="intron",
                         start=exon_lst[i-1].end + 1,
@@ -224,124 +229,125 @@ class Transcript:
                         attributes=f"gene_id \"{self.gene_id}\"; "
                                    f"transcript_id \"{self.id}\";",
                     )
-                    self.transcript_lines['intron'].append(intron)
+                    self.entries['intron'].append(intron)
 
     def find_transcript(self) -> None:
         """Add transcript lines."""
-        if not 'transcript' in self.transcript_lines.keys():
-            for key in self.transcript_lines.keys():
-                for entry in self.transcript_lines[key]:
+        if not 'transcript' in self.entries.keys():
+            for key in self.entries.keys():
+                for entry in self.entries[key]:
                     if entry.start < self.start or self.start < 0:
                         self.start = entry.start
                     if entry.end > self.end:
                         self.end = entry.end
-            tx_line = [
-                self.chr,
-                entry.source,
-                'transcript',
-                self.start,
-                self.end,
-                '.',
-                entry.strand,
-                '.',
-                self.id,
-            ]
-            self.add_line(tx_line)
+            entry = GTFEntry(
+                name=self.chr,
+                source=entry.source,
+                feature='transcript',
+                start=self.start,
+                end=self.end,
+                score='.',
+                strand=entry.strand,
+                frame='.',
+                attributes=self.id,
+            )
+            self.add(entry)
 
     def find_start_stop_codon(self) -> None:
         """Add start/stop codon lines."""
 
-        if not 'start_codon' in self.transcript_lines.keys():
-            self.transcript_lines.update({'start_codon' : []})
-        if not 'stop_codon' in self.transcript_lines.keys():
-            self.transcript_lines.update({'stop_codon' : []})
+        if not 'start_codon' in self.entries:
+            self.entries.update({'start_codon' : []})
+        if not 'stop_codon' in self.entries:
+            self.entries.update({'stop_codon' : []})
 
-        key = ''
-        if 'CDS' in self.transcript_lines.keys():
+        key = None
+        if 'CDS' in self.entries:
             key = 'CDS'
-        elif 'exon' in self.transcript_lines.keys():
+        elif 'exon' in self.entries:
             key = 'exon'
+        if key is None:
+            return
 
-        if key:
-            self.transcript_lines[key].sort(key = lambda x: x.start)
-            tx = self.transcript_lines[key][0]
-            line1 = GTFEntry(
-                seqname=self.chr,
-                source=tx.source,
-                feature="",
-                start=tx.start,
-                end=tx.start + 2,
-                score='.',
-                strand=self.strand,
-                frame='0',
-                attributes=f"gene_id \"{self.gene_id}\"; "
-                           f"transcript_id \"{self.id}\";",
-            )
-            tx = self.transcript_lines[key][-1]
-            line2 = GTFEntry(
-                seqname=self.chr,
-                source=tx.source,
-                feature='',
-                start=tx.end - 2,
-                end=tx.end,
-                score='.',
-                strand=self.strand,
-                frame='0',
-                attributes=f"gene_id \"{self.gene_id}\"; "
-                           f"transcript_id \"{self.id}\";",
-            )
+        self.entries[key].sort(key = lambda x: x.start)
+        tx = self.entries[key][0]
+        line1 = GTFEntry(
+            name=self.chr,
+            source=tx.source,
+            feature="",
+            start=tx.start,
+            end=tx.start + 2,
+            score='.',
+            strand=self.strand,
+            frame='0',
+            attributes=f"gene_id \"{self.gene_id}\"; "
+                        f"transcript_id \"{self.id}\";",
+        )
+        tx = self.entries[key][-1]
+        line2 = GTFEntry(
+            name=self.chr,
+            source=tx.source,
+            feature='',
+            start=tx.end - 2,
+            end=tx.end,
+            score='.',
+            strand=self.strand,
+            frame='0',
+            attributes=f"gene_id \"{self.gene_id}\"; "
+                        f"transcript_id \"{self.id}\";",
+        )
 
-            fragmented_transcript = True
-            if tx.strand == '+':
-                line1.feature = 'start_codon'
-                line2.feature = 'stop_codon'
-                if self.transcript_lines[key][0].frame == 0:
-                    fragmented_transcript = False
-                start = line1
-                stop = line2
+        fragmented_transcript = True
+        if tx.strand == '+':
+            line1.feature = 'start_codon'
+            line2.feature = 'stop_codon'
+            if self.entries[key][0].frame == 0:
+                fragmented_transcript = False
+            start = line1
+            stop = line2
+        else:
+            line1.feature = 'stop_codon'
+            line2.feature = 'start_codon'
+            if self.entries[key][-1].frame == 0:
+                fragmented_transcript = False
+            stop = line1
+            start = line2
+        if ('start_codon' not in self.entries.keys()
+                and not fragmented_transcript):
+            if not fragmented_transcript:
+                self.add(start)
             else:
-                line1.feature = 'stop_codon'
-                line2.feature = 'start_codon'
-                if self.transcript_lines[key][-1].frame == 0:
-                    fragmented_transcript = False
-                stop = line1
-                start = line2
-            if ('start_codon' not in self.transcript_lines.keys()
-                    and not fragmented_transcript):
-                if not fragmented_transcript:
-                    self.add_line(start)
-                else:
-                    self.transcript_lines.update({'start_codon' : []})
-            if 'stop_codon' not in self.transcript_lines.keys():
-                self.add_line(stop)
+                self.entries.update({'start_codon' : []})
+        if 'stop_codon' not in self.entries.keys():
+            self.add(stop)
 
-    def redo_phase(self):
-        if 'CDS' in self.transcript_lines:
-            self.transcript_lines['CDS'] = sorted(
-                self.transcript_lines['CDS'],
+    def redo_phase(self) -> None:
+        if 'CDS' in self.entries:
+            self.entries['CDS'] = sorted(
+                self.entries['CDS'],
                 key=lambda x: x.start,
                 reverse=(self.strand == '-'),
             )
             phase = 0
-            for line in self.transcript_lines['CDS']:
+            for line in self.entries['CDS']:
                 line.frame = str(phase)  # type: ignore
                 phase = (3 - (line.end - line.start + 1 - phase) % 3) % 3
 
     def check_splits(self) -> None:
-        for k in self.transcript_lines.keys():
-            self.transcript_lines[k] = sorted(
-                self.transcript_lines[k],
+        for k in self.entries.keys():
+            self.entries[k] = sorted(
+                self.entries[k],
                 key=lambda x: x.start,
             )
-            new_list = [self.transcript_lines[k][0]]
-            for i in range(1, len(self.transcript_lines[k])):
-                if new_list[-1].end == self.transcript_lines[k][i].start-1:
-                    new_list[-1].end = self.transcript_lines[k][i].end
+            new_list = [self.entries[k][0]]
+            for i in range(1, len(self.entries[k])):
+                if new_list[-1].end == self.entries[k][i].start-1:
+                    new_list[-1].end = self.entries[k][i].end
                 else:
-                    new_list.append(self.transcript_lines[k][i])
-            self.transcript_lines[k] = new_list
+                    new_list.append(self.entries[k][i])
+            self.entries[k] = new_list
 
-    def get_gtf(self, prefix: str = "") -> list[GTFEntry]:
+    def to_list(self, prefix: str = "") -> list[GTFEntry]:
         """Creates gtf output for the transcript.
 
         Returns:
@@ -351,8 +357,8 @@ class Transcript:
         if prefix:
             prefix += '.'
         tx_line: GTFEntry | None = None
-        for k in self.transcript_lines.keys():
-            for i, entry in enumerate(self.transcript_lines[k]):
+        for k in self.entries.keys():
+            for i, entry in enumerate(self.entries[k]):
 
                 if k == 'transcript':
                     tx_line = entry
@@ -361,14 +367,14 @@ class Transcript:
 
                 elif k == 'CDS':
                     cds_type = 'internal'
-                    if len(self.transcript_lines[k]) == 1:
+                    if len(self.entries[k]) == 1:
                         cds_type = 'single'
                     elif ((i == 0 and self.strand == '+')
-                            or (i == len(self.transcript_lines[k]) - 1
+                            or (i == len(self.entries[k]) - 1
                                     and self.strand == '-')
                     ):
                         cds_type = 'initial'
-                    elif ((i == len(self.transcript_lines[k]) - 1
+                    elif ((i == len(self.entries[k]) - 1
                                 and self.strand == '+')
                             or (i == 0 and self.strand == '-')
                     ):
@@ -387,10 +393,10 @@ class Transcript:
 
                 gtf.append(entry)
 
-        if 'exon' not in self.transcript_lines.keys():
-            for entry in self.transcript_lines['CDS']:
+        if 'exon' not in self.entries.keys():
+            for entry in self.entries['CDS']:
                 gtf.append(
-                    GTFEntry(**(entry.model_dump() and {"feature": "exon"}))
+                    GTFEntry(**(entry.model_dump() | {"feature": "exon"}))
                 )
 
         gtf = sorted(gtf, key=lambda entry: (entry.start, entry.end))

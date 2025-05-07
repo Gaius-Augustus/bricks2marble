@@ -2,7 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ..struct.fasta import ENCODING, FASTA, MAP, Region
+from ..struct.fasta import FASTA, MAP, Segment
 
 
 def load_fasta(
@@ -11,20 +11,37 @@ def load_fasta(
     restrict: int = -1,
     repeat_masking: bool = True,
     overlap: int = 0,
-    pad: int = -1,
-    encoding: np.ndarray | None = None,
     use_map: dict[str, int] | None = None,
 ) -> FASTA:
-    """Loads a :class:`FASTA` object that includes the one-hot encoded
-    sequences of nucleotides and
+    """Loads a :class:`FASTA` object that makes handling a nucleotide
+    sequence easier.
+
+    Args:
+        path (Path | str): Path to the fasta file.
+        T (int): The whole genome is split into smaller sequence chunks
+            of this size. Sequences in the file that have a length not
+            divisible by ``T`` are padded with ``-1``.
+        restrict (int, optional): Restrict the reading window. Only
+            reads the given number of nucleotides from the file.
+            Defaults to -1, which means everything is read.
+        repeat_masking (bool, optional): Whether to differentiate
+            repeat-masked nucleotides and normal ones in the file.
+            Defaults to True.
+        overlap (int, optional): If greater than zero, two consecutive
+            sequences overlap by the given integer. Defaults to 0.
+        use_map (dict[str, int], optional): The encoding to use for the
+            nucleotides. The default order of enumeration is ``A C G T N
+            a c g t``.
     """
     with open(path, "r") as f:
         lines = f.readlines(restrict)
 
-    if encoding is None:
-        encoding = ENCODING[:5] if not repeat_masking else ENCODING
     if use_map is None:
         use_map = MAP
+    else:
+        use_map = use_map.copy()
+        if "n" not in use_map:
+            use_map["n"] = use_map["N"]
 
     sequences: list[str] = []
     name_sequences: list[str] = []
@@ -38,21 +55,20 @@ def load_fasta(
             else:
                 sequences[-1] += line.strip().upper()
 
-    encoding = encoding
     sequences_ = []
     for seq in sequences:
         sequences_.append(np.array(list(map(use_map.get, seq))))
     del sequences
 
     all_sequences = []
-    coords: list[Region] = []
+    coords: list[Segment] = []
     for k, seq in enumerate(sequences_):
         N, left = divmod(len(seq) - overlap, T - overlap)
         enc = np.zeros((N + int(left>0), T), dtype=np.int8)
         T_sample = T - overlap
         for i in range(N):
             enc[i, :] = seq[i * T_sample : i * T_sample + T]
-            coords.append(Region(
+            coords.append(Segment(
                 name=name_sequences[k],
                 start=i * T_sample + 1,
                 end=i * T_sample + T,
@@ -62,8 +78,8 @@ def load_fasta(
             if surplus > T:
                 raise RuntimeError("Dataset creation failed")
             enc[-1, :surplus] = seq[-surplus:]
-            enc[-1, surplus:] = pad
-            coords.append(Region(
+            enc[-1, surplus:] = -1
+            coords.append(Segment(
                 name=name_sequences[k],
                 start=N * T_sample + 1,
                 end=N * T_sample + surplus,

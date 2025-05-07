@@ -1,4 +1,3 @@
-from pathlib import Path
 from typing import Callable, Literal
 
 import numpy as np
@@ -24,18 +23,13 @@ HMM_STATE_AGGREGATION = np.array([
 ])
 
 
-def reduce_hmm_state_labels(arr: np.ndarray) -> np.ndarray:
-    new_arr = HMM_STATE_AGGREGATION.argmax(1)[arr]
-    new_arr[(new_arr > 1)] = 2
-    return new_arr
-
-
-def split_regions(
+def _split_regions(
     encoded_labels: np.ndarray,
     offset: int = 0,
 ) -> list[Region]:
     arr = np.array(encoded_labels)
-    arr = reduce_hmm_state_labels(arr)
+    arr = HMM_STATE_AGGREGATION.argmax(1)[arr]
+    arr[(arr > 1)] = 2
     change_points = np.where(np.diff(arr) != 0)[0]
     start_points = np.insert(change_points + 1, 0, 0)
     end_points = np.append(change_points, arr.size - 1)
@@ -49,11 +43,10 @@ def split_regions(
         )
         for start, end in zip(start_points, end_points)
     ]
-
     return regions
 
 
-def get_tx_from_range(
+def _transcripts_from_regions(
     regions: list[Region],
 ) -> tuple[list[Region], list[list[Region]], list[Region]]:
     """Extracts transcript regions from a given tuples of class regions.
@@ -88,7 +81,7 @@ def get_tx_from_range(
     return initial_tx, txs, current_tx
 
 
-def merge_re_prediction(
+def _merge_reprediction(
     all_tx: list[list[Region]],
     new_tx: list[list[Region]],
     breakpoint: int,
@@ -164,14 +157,31 @@ def merge_re_prediction(
 def GTF_from_model(
     fasta: FASTA,
     predict_func: Callable[[FASTA], np.ndarray],
-    file: Path | str = "out.gtf",
+    model_name: str = "Model",
     strand: Literal["+", "-"] = "+",
     tx_id: int = 0,
     filter_transcripts: bool = True,
-) -> tuple[Annotation, int]:
+) -> Annotation:
+    """Generate a genome annotation using a nucleotide sequence and a
+    function that outputs feature labels of regions of interest.
+
+    Args:
+        fasta (FASTA): A :class:`FASTA` object containing the nucleotide
+            sequences of interest.
+        predict_func (Callable): A function that takes a :class:`FASTA`
+            object as input and outputs a numpy array of shape ``(B, T,
+            D)``.
+        model_name (str): Name of the model that is used, or any other
+            identifier. This will only be listed as the 'source' in the
+            GTF file.
+        strand ("+" or "-"): Whether the annotation is for the forward
+            or backward strand. Defaults to "+".
+        tx_id (int): ? # TODO
+        filter_transcripts (bool): ? # TODO
+    """
     labels = predict_func(fasta)
 
-    annotation = Annotation(file, f'anno')
+    annotation = Annotation()
     ranges: dict[str, list[list[Region]]] = {}
 
     repred_in = []
@@ -179,16 +189,16 @@ def GTF_from_model(
     repred_coords = []
 
     for i in range(labels.shape[0]-1):
-        if (fasta.coords[i].name == fasta.coords[i+1].name and
+        if (fasta.segments[i].name == fasta.segments[i+1].name and
             labels[i, -1] != labels[i+1, 0]
         ):
             repred_in.append(np.concatenate(
-                (fasta.sequences[i], fasta.sequences[i+1]),
+                (fasta.nuc[i], fasta.nuc[i+1]),
                 axis=0,
             ))
             repred_index.append(i)
-            repred_coords.append(fasta.coords[i])
-            repred_coords.append(fasta.coords[i+1])
+            repred_coords.append(fasta.segments[i])
+            repred_coords.append(fasta.segments[i+1])
 
     repred_in = np.array(repred_in)
     if repred_in.size > 0:
@@ -198,11 +208,11 @@ def GTF_from_model(
     re_txs = None
     end_fragment = []
 
-    for i, (y, c) in enumerate(zip(labels, fasta.coords)):
-        regions = split_regions(y, c.start)
+    for i, (y, c) in enumerate(zip(labels, fasta.segments)):
+        regions = _split_regions(y, c.start)
         is_ir = 'intergenic' in [r.name for r in regions]
-        coord_diff = 0 if i == 0 else (c.end - fasta.coords[i-1].start)
-        start_fragment, txs, new_end_fragment = get_tx_from_range(regions)
+        coord_diff = 0 if i == 0 else (c.end - fasta.segments[i-1].start)
+        start_fragment, txs, new_end_fragment = _transcripts_from_regions(regions)
 
         if c.name not in ranges:
             ranges[c.name] = []
@@ -217,7 +227,7 @@ def GTF_from_model(
 
         if is_ir and txs:
             if re_txs:
-                ranges[c.name] = merge_re_prediction(
+                ranges[c.name] = _merge_reprediction(
                     ranges[c.name],
                     txs,
                     c.start + coord_diff//2,
@@ -240,8 +250,8 @@ def GTF_from_model(
             repred_out = repred_out[1:]
             if c_re.strand == '-':
                 current_re = current_re[::-1]
-            re_ranges = split_regions(current_re, c_re.start)
-            start_fragment, re_txs, new_end_fragment = get_tx_from_range(
+            re_ranges = _split_regions(current_re, c_re.start)
+            start_fragment, re_txs, new_end_fragment = _transcripts_from_regions(
                 re_ranges
             )
 
@@ -251,7 +261,7 @@ def GTF_from_model(
                 end_fragment += start_fragment[1:]
                 ranges[c.name] += [end_fragment]
             if re_txs:
-                ranges[c.name] = merge_re_prediction(
+                ranges[c.name] = _merge_reprediction(
                     ranges[c.name],
                     re_txs,
                     c_re.end + coord_diff//2,
@@ -266,12 +276,12 @@ def GTF_from_model(
             t_id = f'g{tx_id}.t1'
             g_id = f'g{tx_id}'
             phase = 0
-            annotation.transcript_update(t_id, g_id, seq, strand)
-            annotation.genes_update(g_id, t_id)
+            annotation.add_transcript(t_id, g_id, seq, strand)
+            annotation.add_gene(g_id, t_id)
             for r in tx:
-                annotation.transcripts[t_id].add_line(GTFEntry(
-                    seqname=seq,
-                    source='Tiberius',
+                annotation.transcripts[t_id].add(GTFEntry(
+                    name=seq,
+                    source=model_name,
                     feature=r.name,
                     start=r.start,
                     end=r.end,
@@ -294,7 +304,7 @@ def GTF_from_model(
     for tx in remove_tx:
         annotation.transcripts.pop(tx)
 
-    annotation.norm_tx_format()
+    annotation.norm_transcripts()
     annotation.find_genes()
 
-    return annotation, tx_id
+    return annotation
