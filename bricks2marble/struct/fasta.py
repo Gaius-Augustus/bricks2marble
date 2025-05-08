@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, overload
 
 import numpy as np
 from pydantic import BaseModel
@@ -130,21 +130,31 @@ class Sequence:
             ) for i in range(1, self.N+1)
         ]
 
-    def one_hot(self, sequences: np.ndarray | None = None) -> np.ndarray:
+    def one_hot(
+        self,
+        sequences: np.ndarray | None = None,
+        pad_index: int = 4,
+    ) -> np.ndarray:
         """Returns a one-hot encoded version of :meth:`Sequence.nuc` of
         shape ``(N, T, 6)``.
+
+        Args:
+            sequences (np.ndarray, optional): Which sequences to encode.
+                Defaults to ``self.nuc``.
+            pad_index (int, optional): What to replace the padding
+                character (-1) by before encoding. Default to 4, which
+                is an `N`.
         """
-        return ENCODING[self.nuc if sequences is None else sequences]
+        nuc = self.nuc if sequences is None else sequences
+        nuc[nuc == -1] = pad_index
+        return ENCODING[nuc]
 
     def resample(self, T: int) -> "Sequence":
         """Returns a :class:`Sequence` that is grouped into chunks of
         the given length. This can lead to differently padded sequences.
         """
-        if T <= 0 or T > self.size:
-            raise ValueError(
-                f"Unallowed chunk size ({T})"
-                f" for sequence of length {self.size}"
-            )
+        if T <= 0:
+            raise ValueError(f"Unallowed chunk size ({T})")
         missing = (-self.size) % T
         N = (self.size + missing) // T
         flattened = np.concatenate((
@@ -275,9 +285,7 @@ class FASTA:
         pad_index: int = 4,
     ) -> np.ndarray:
         """Returns a one-hot encoded version of :meth:`FASTA.nuc` of
-        shape ``(N, T, 5)``. If the sequences are repeat-masked, these
-        positions are two-hot vectors and the last dimension is expanded
-        by 1, leading to sequences of shape ``(N, T, 6)``.
+        shape ``(N, T, 6)``.
 
         Args:
             sequences (np.ndarray, optional): Which sequences to encode.
@@ -311,6 +319,14 @@ class FASTA:
             ) / self.size
             for k in occs[0]
         }
+
+    @overload
+    def __getitem__(self, key: int) -> Sequence:
+        ...
+
+    @overload
+    def __getitem__(self, key: int | str) -> Sequence | list[Sequence]:
+        ...
 
     def __getitem__(self, key: int | str) -> Sequence | list[Sequence]:
         if isinstance(key, str):
