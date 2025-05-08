@@ -186,6 +186,7 @@ class Annotation:
             gene_numb += 1
         return lookup
 
+    #   __str__
     def to_list(self) -> list[GTFEntry]:
         """Returns a list of :class:`GTFEntry` objects."""
         gtf = []

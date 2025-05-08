@@ -55,6 +55,169 @@ class Region(Segment):
         raise NotImplementedError("Can only compare Region to Region type")
 
 
+class Sequence:
+    """Class representing a single nucleotide sequence or a continuous
+    subsequence of it. Each :class:`Sequence` has the name of its origin
+    sequence and a start and end index of where the (sub-)sequence is
+    found within the context sequence.
+
+    The sequences are encoded in chunks of a particular length ``T`` and
+    consist of integers 0 to 8 with the order ``ACGTNacgt``. Optional
+    padding is done with a token ``-1`` at the end of the last sequence,
+    if necessary.
+
+    Args:
+        sequences (list[Sequence]): An array of shape ``(N, T)`` which
+            holds encoded nucleotides, where ``N`` is the number of
+            sequences of length ``T``. This array is later accessed by
+            ``FASTA.nuc``.
+    """
+
+    def __init__(
+        self,
+        sequence: np.ndarray,
+        name: str,
+        start: int = 0,
+        end: int = -1,
+    ) -> None:
+        self.name = name
+        self._sequence = sequence
+        self._start = start
+        self._end = end
+
+    @property
+    def nuc(self) -> np.ndarray:
+        return self._sequence
+
+    @property
+    def flat(self) -> np.ndarray:
+        return self._sequence.flatten()[:self.size]
+
+    @property
+    def size(self) -> int:
+        return self.end - self.start
+
+    @property
+    def N(self) -> int:
+        return self._sequence.shape[0]
+
+    @property
+    def T(self) -> int:
+        return self._sequence.shape[1]
+
+    @property
+    def start(self) -> int:
+        return self._start
+
+    @property
+    def end(self) -> int:
+        if self._end >= 0:
+            return self._end
+        else:
+            non_padded = np.nonzero(self._sequence[-1] == -1)
+            if non_padded[0].size > 0:
+                self._end = (self.N-1)*self.T + non_padded[0][0] + 1
+            else:
+                self._end = self._sequence.size
+            return self._end
+
+    def segments(self) -> list[Segment]:
+        return [
+            Segment(
+                name=self.name,
+                start=self.start+(i-1)*self.T+1,
+                end=min(self.start+i*self.T, self.start+self.size),
+            ) for i in range(1, self.N+1)
+        ]
+
+    def one_hot(self, sequences: np.ndarray | None = None) -> np.ndarray:
+        """Returns a one-hot encoded version of :meth:`Sequence.nuc` of
+        shape ``(N, T, 6)``.
+        """
+        return ENCODING[self.nuc if sequences is None else sequences]
+
+    def resample(self, T: int) -> "Sequence":
+        """Returns a :class:`Sequence` that is grouped into chunks of
+        the given length. This can lead to differently padded sequences.
+        """
+        if T <= 0 or T > self.size:
+            raise ValueError(
+                f"Unallowed chunk size ({T})"
+                f" for sequence of length {self.size}"
+            )
+        missing = (-self.size) % T
+        N = (self.size + missing) // T
+        flattened = np.concatenate((
+            self.flat,
+            np.full(missing, -1, dtype=self._sequence.dtype),
+        ))
+        array = flattened.reshape(N, T)
+        return Sequence(array, name=self.name, start=self.start, end=self.end)
+
+    def positions(
+        self,
+        start: int | None = None,
+        end: int | None = None,
+        /,
+    ) -> "Sequence":
+        """Returns a :class:`Sequence` object that only includes
+        nucleotides from the specified range.
+
+        Args:
+            start (int, optional): First index of the specified range.
+            end (int, optional): Last index of the specified range.
+        """
+        if end is None:
+            if start is None:
+                start, end = 0, self.size
+            else:
+                end = start
+                start = 0
+        if end > self.end:
+            raise IndexError(
+                f"Index {end} out of bounds for range "
+                f"({self.start}, {self.end})"
+            )
+        act_start: int = start - self.start  # type: ignore
+        act_end = end - self.start
+
+        seq = Sequence(
+            self.flat[np.newaxis, act_start:act_end],
+            name=self.name,
+            start=start,  # type: ignore
+            end=end,
+        )
+        return seq.resample(self.T)
+
+    def occurences(
+        self,
+        separate_repeat_masked: bool = False,
+    ) -> dict[str, float]:
+        """Counts the number of occurences of each nucleotide.
+
+        Args:
+            separate_repeat_masked (bool, optional): Whether to separate
+                repeat-masked nucleotides from non-masked. Defaults to
+                False.
+        """
+        if separate_repeat_masked:
+            probs = {token: 0. for token in "ACGTNacgt"}
+        else:
+            probs = {token: 0. for token in "ACGTN" if token.upper() == token}
+        size = self.size
+        for index, token in enumerate("ACGTNacgt"):
+            if not separate_repeat_masked:
+                token = token.upper()
+            probs[token] += (self.nuc == index).sum() / size
+        return probs
+
+    def __str__(self) -> str:
+        return f"{self.name!r}[{self.start}:{self.end}]"
+
+    def __repr__(self) -> str:
+        return f"Sequence({self.name!r}, {self.start}, {self.end})"
+
+
 class FASTA:
     """This class manages a sequence of nucleotides that is grouped into
     chunks of a given length with additional information about their
@@ -65,34 +228,31 @@ class FASTA:
     :meth:`bricks2marble.load_fasta`.
 
     Args:
-        sequences (np.ndarray): An array of shape ``(N, T)`` which holds
-            encoded nucleotides, where ``N`` is the number of sequences
-            of length ``T``. This array is later accessed by
-            ``FASTA.nuc``.
-        segments (list[Segment]): A list of length ``N``, matching the
-            first dimension of ``sequences``. Each element is a
-            :class:`Segment` object specifying where each sequence is
-            coming from.
+        sequences (list[Sequence]): An list of :class:`Sequence`
+            objects.
     """
 
-    def __init__(
-        self,
-        sequences: np.ndarray,
-        segments: list[Segment],
-    ) -> None:
+    def __init__(self, sequences: list[Sequence]) -> None:
         self._sequences = sequences
-        self._segments = segments
-        self.repeat_masking = np.any(sequences > 4)
 
     @property
     def nuc(self) -> np.ndarray:
         """Sequences of encoded nucleotides of shape ``(N, T)``."""
-        return self._sequences
+        return np.concatenate(
+            [self._sequences[k].nuc for k in range(len(self._sequences))],
+        )
+
+    @property
+    def size(self) -> int:
+        return sum(seq.size for seq in self._sequences)
 
     @property
     def segments(self) -> list[Segment]:
         """Sequences of segments of length ``N``."""
-        return self._segments
+        segs = []
+        for k in range(len(self._sequences)):
+            segs.extend(self._sequences[k].segments())
+        return segs
 
     @property
     def N(self) -> int:
@@ -102,66 +262,33 @@ class FASTA:
     def T(self) -> int:
         return self.nuc.shape[1]
 
-    def comprises(self) -> dict[str, tuple[int, int]]:
-        """Returns a dictionary mapping sequence names to the ranges
-        of nucleotides that are in this :class:`FASTA` object.
-        """
-        names = {c.name for c in self.segments}
-        content = {}
-        for name in names:
-            start = min(c.start for c in self.segments if c.name == name)
-            end = max(c.end for c in self.segments if c.name == name)
-            content[name] = (start, end)
-        return content
-
     def resample(self, T: int) -> "FASTA":
         """Returns a :class:`FASTA` object that has the same sequences
         grouped into chunks of the given length. This can lead to
         differently padded sequences.
         """
-        sequences = []
-        new_coords = []
+        return FASTA([seq.resample(T) for seq in self._sequences])
 
-        file_data = {}
-        for row, c in zip(self.nuc, self.segments):
-            valid_len = c.end - c.start + 1
-            data = row[:valid_len]
-            if c.name not in file_data:
-                file_data[c.name] = []
-            file_data[c.name].extend(data)
-
-        for seq, values in file_data.items():
-            total = len(values)
-            num_chunks = (total + T - 1) // T
-
-            for i in range(num_chunks):
-                chunk_start = i * T
-                chunk_end = min((i + 1) * T, total)
-                chunk = values[chunk_start:chunk_end]
-
-                if len(chunk) < T:
-                    chunk += [-1] * (T - len(chunk))
-
-                sequences.append(chunk)
-                new_coords.append(Segment(
-                    name=seq,
-                    start=chunk_start+1,
-                    end=chunk_end,
-                ))
-
-        return FASTA(np.array(sequences), new_coords)
-
-    def one_hot(self, sequences: np.ndarray | None = None) -> np.ndarray:
+    def one_hot(
+        self,
+        sequences: np.ndarray | None = None,
+        pad_index: int = 4,
+    ) -> np.ndarray:
         """Returns a one-hot encoded version of :meth:`FASTA.nuc` of
         shape ``(N, T, 5)``. If the sequences are repeat-masked, these
         positions are two-hot vectors and the last dimension is expanded
         by 1, leading to sequences of shape ``(N, T, 6)``.
+
+        Args:
+            sequences (np.ndarray, optional): Which sequences to encode.
+                Defaults to ``self.nuc``.
+            pad_index (int, optional): What to replace the padding
+                character (-1) by before encoding. Default to 4, which
+                is an `N`.
         """
-        seq = self.nuc if sequences is None else sequences
-        seq[seq == -1] = 4
-        if not self.repeat_masking:
-            return ENCODING[:5, :5][seq]
-        return ENCODING[seq]
+        nuc = self.nuc if sequences is None else sequences
+        nuc[nuc == -1] = pad_index
+        return ENCODING[nuc]
 
     def occurences(
         self,
@@ -175,93 +302,29 @@ class FASTA:
                 repeat-masked nucleotides from non-masked. Defaults to
                 False.
         """
-        if self.repeat_masking and separate_repeat_masked:
-            probs = {token: 0. for token in MAP.keys() if token != "n"}
-        else:
-            probs = {token: 0. for token in MAP.keys()
-                     if token.upper() == token}
-        size = (self.nuc[self.nuc != -1]).size
-        if self.repeat_masking:
-            for token, index in MAP.items():
-                if token == "n": continue
-                if not separate_repeat_masked:
-                    token = token.upper()
-                probs[token] += (self.nuc == index).sum() / size
-        else:
-            for token, index in MAP.items():
-                if token.upper() == token:
-                    probs[token] += (self.nuc == index).sum() / size
-        return probs
-
-    def positions(
-        self,
-        start: int | None = None,
-        end: int | None = None,
-        /,
-    ) -> "FASTA":
-        """Returns a :class:`FASTA` object that only includes
-        nucleotides from the specified range with matching segments. The
-        range is specified for ``FASTA.nuc`` without the padding, i.e.
-        it does not look up the actual positions of the sequences but
-        instead uses its current ordering in the memory of this object.
-
-        Args:
-            start (int, optional): First index of the specified range.
-            end (int, optional): Last index of the specified range.
-        """
-        if end is None:
-            if start is None:
-                start, end = 0, -1
-            else:
-                end = start
-                start = 0
-        start = int(start)  # type: ignore
-
-        flat_nuc = []
-        flat_seq = []
-        flat_pos = []
-        for seq, c in zip(self.nuc, self.segments):
-            valid_len = c.end - c.start + 1
-            flat_nuc.append(seq[:valid_len])
-            flat_seq.append(np.full(valid_len, c.name, dtype=object))
-            flat_pos.append(np.arange(c.start-1, c.end))
-        sliced_nuc = np.concatenate(flat_nuc)[start:end]
-        sliced_seq = np.concatenate(flat_seq)[start:end]
-        sliced_pos = np.concatenate(flat_pos)[start:end]
-
-        new_seqs = []
-        new_coords = []
-        ordered_seq = sliced_seq[
-            np.sort(np.unique(sliced_seq, return_index=True)[1])
+        occs = [
+            seq.occurences(separate_repeat_masked) for seq in self._sequences
         ]
-        for seq in np.unique(ordered_seq):
-            mask = (sliced_seq == seq)
-            file_vals = sliced_nuc[mask]
-            file_pos = sliced_pos[mask]
+        return {
+            k: sum(
+                self._sequences[i].size * d[k] for i, d in enumerate(occs)
+            ) / self.size
+            for k in occs[0]
+        }
 
-            num_chunks = -(-len(file_vals) // self.T)
-            pad_len = num_chunks * self.T - len(file_vals)
+    def __getitem__(self, key: int | str) -> Sequence | list[Sequence]:
+        if isinstance(key, str):
+            seqs = []
+            for seq in self._sequences:
+                if seq.name == key:
+                    seqs.append(seq)
+            if len(seqs) == 0:
+                raise KeyError(f"No sequence named {key!r}")
+            return seqs[0] if len(seqs) == 1 else seqs
+        return self._sequences[key]
 
-            padded_vals = np.pad(file_vals, (0, pad_len), constant_values=-1)
-            padded_pos = np.pad(file_pos, (0, pad_len), constant_values=-1)
+    def __str__(self) -> str:
+        return "[" + ", ".join(str(seq) for seq in self._sequences) + "]"
 
-            reshaped_vals = padded_vals.reshape(-1, self.T)
-            reshaped_pos = padded_pos.reshape(-1, self.T)
-
-            new_seqs.extend(reshaped_vals)
-            for row_pos in reshaped_pos:
-                real_pos = row_pos[row_pos != -1]
-                if len(real_pos) > 0:
-                    new_coords.append(Segment(
-                        name=seq,
-                        start=real_pos[0] + 1,
-                        end=real_pos[-1] + 1,
-                    ))
-                else:
-                    new_coords.append(Segment(
-                        name=seq,
-                        start=-1,
-                        end=-1
-                    ))
-
-        return FASTA(np.array(new_seqs), new_coords)
+    def __repr__(self) -> str:
+        return "FASTA(" + ", ".join(str(seq) for seq in self._sequences) + ")"

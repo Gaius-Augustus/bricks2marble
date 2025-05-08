@@ -2,7 +2,7 @@ from typing import Callable, Literal
 
 import numpy as np
 
-from .struct import FASTA, Annotation, GTFEntry, Region
+from .struct import FASTA, Annotation, GTFEntry, Region, Sequence
 
 HMM_STATE_AGGREGATION = np.array([
     [1., 0., 0., 0., 0.],
@@ -179,31 +179,30 @@ def GTF_from_model(
         tx_id (int): ? # TODO
         filter_transcripts (bool): ? # TODO
     """
-    labels = predict_func(fasta)
-
     annotation = Annotation()
     ranges: dict[str, list[list[Region]]] = {}
 
-    repred_in = []
+    labels = predict_func(fasta)
+
+    repred_seqs = []
     repred_index = []
-    repred_coords = []
 
     for i in range(labels.shape[0]-1):
-        if (fasta.segments[i].name == fasta.segments[i+1].name and
-            labels[i, -1] != labels[i+1, 0]
-        ):
-            repred_in.append(np.concatenate(
-                (fasta.nuc[i], fasta.nuc[i+1]),
-                axis=0,
+        if (fasta.segments[i].name == fasta.segments[i+1].name
+                and labels[i, -1] != labels[i+1, 0]):
+            repred_seqs.append(Sequence(
+                np.concatenate(
+                    (fasta.nuc[i], fasta.nuc[i+1]),
+                    axis=0,
+                ),
+                name=fasta.segments[i].name,
+                start=fasta.segments[i].start,
+                end=fasta.segments[i+1].end,
             ))
             repred_index.append(i)
-            repred_coords.append(fasta.segments[i])
-            repred_coords.append(fasta.segments[i+1])
 
-    repred_in = np.array(repred_in)
-    if repred_in.size > 0:
-        print(f"{repred_in.shape=}")
-        repred_out = predict_func(FASTA(repred_in, repred_coords))
+    if len(repred_seqs) > 0:
+        repred_out = predict_func(FASTA(repred_seqs))
 
     re_txs = None
     end_fragment = []
@@ -212,7 +211,9 @@ def GTF_from_model(
         regions = _split_regions(y, c.start)
         is_ir = 'intergenic' in [r.name for r in regions]
         coord_diff = 0 if i == 0 else (c.end - fasta.segments[i-1].start)
-        start_fragment, txs, new_end_fragment = _transcripts_from_regions(regions)
+        start_fragment, txs, new_end_fragment = _transcripts_from_regions(
+            regions
+        )
 
         if c.name not in ranges:
             ranges[c.name] = []
@@ -244,15 +245,15 @@ def GTF_from_model(
                 name=c.name,
                 start=c.start,
                 end=c.end+coord_diff,
-                strand=strand,  # unsure
+                strand=strand,  # TODO unsure
             )
             current_re = repred_out[0]
             repred_out = repred_out[1:]
             if c_re.strand == '-':
                 current_re = current_re[::-1]
             re_ranges = _split_regions(current_re, c_re.start)
-            start_fragment, re_txs, new_end_fragment = _transcripts_from_regions(
-                re_ranges
+            start_fragment, re_txs, new_end_fragment = (
+                _transcripts_from_regions(re_ranges)
             )
 
             if (not is_ir and end_fragment and start_fragment \
