@@ -1,0 +1,11 @@
+# this is a test gtf
+TestSequence_1	Method	gene	1	1000	.	+	.	gene_id "g.1";
+TestSequence_1	Method	transcript	1	250	.	+	.	gene_id "g.1"; transcript_id "g.1.t.1";
+TestSequence_1	Method	exon	1	120	.	+	0	gene_id "g.1"; transcript_id "g.1.t.1";
+TestSequence_1	Method	intron	121	180	.	+	.	gene_id "g.1"; transcript_id "g.1.t.1";
+TestSequence_1	Method	exon	181	240	.	+	0	gene_id "g.1"; transcript_id "g.1.t.1";
+TestSequence_1	Method	intron	241	250	.	+	.	gene_id "g.1"; transcript_id "g.1.t.1";
+TestSequence_1	Method	transcript	251	1000	.	+	.	gene_id "g.1"; transcript_id "g.1.t.2";
+TestSequence_1	Method	exon	251	500	.	+	0	gene_id "g.1"; transcript_id "g.1.t.2";
+TestSequence_1	Method	intron	501	791	.	+	.	gene_id "g.1"; transcript_id "g.1.t.2";
+TestSequence_1	Method	exon	792	1000	.	+	0	gene_id "g.1"; transcript_id "g.1.t.2";

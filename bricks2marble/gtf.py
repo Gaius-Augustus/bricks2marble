@@ -2,7 +2,7 @@ from typing import Callable, Literal
 
 import numpy as np
 
-from .struct import FASTA, Annotation, GTFEntry, Region, Sequence
+from .struct import FASTA, Annotation, FeatureType, GTFEntry, Region, Sequence
 
 HMM_STATE_AGGREGATION = np.array([
     [1., 0., 0., 0., 0.],
@@ -49,26 +49,29 @@ def _split_regions(
 def _transcripts_from_regions(
     regions: list[Region],
 ) -> tuple[list[Region], list[list[Region]], list[Region]]:
-    """Extracts transcript regions from a given tuples of class regions.
-    It extracts for each transcript the regions of their CDS.
-    Additionally, it reports fragmented txs add the start or end of the
-    input ranges.
+    """Extracts transcript regions (IR to IR) from a given tuples of
+    class regions. For each transcript, it extracts the regions of their
+    CDS. Additionally, it reports fragmented txs at the start or end of
+    the input ranges.
 
     Args:
         regions (list[Region]): A sequence of regions, classifying parts
             of a genome sequence into different labels.
 
     Returns:
-        initial_tx (list): List of exon ranges of the first fragmented
-            transcript.
-        txs (list of lists): List of transcripts with their CDS ranges.
-        current_tx (list): Last fragmented Transcript
+        initial_tx (list): A fragmented transcript at the start of the
+            given regions.
+        txs (list of lists): A list of complete transcripts within the
+            given regions.
+        current_tx (list): A fragmented transcript at the end of the
+            given regions.
     """
     initial_tx: list[Region] = []
     txs: list[list[Region]] = []
     current_tx: list[Region] = []
 
     for region in regions:
+        print(f"{region=}")
         if region.name == 'intergenic':
             if current_tx:
                 txs.append(current_tx)
@@ -209,11 +212,13 @@ def GTF_from_model(
 
     for i, (y, c) in enumerate(zip(labels, fasta.segments)):
         regions = _split_regions(y, c.start)
+        print(f"{i=}, {c=}, {regions=}")
         is_ir = 'intergenic' in [r.name for r in regions]
         coord_diff = 0 if i == 0 else (c.end - fasta.segments[i-1].start)
         start_fragment, txs, new_end_fragment = _transcripts_from_regions(
             regions
         )
+        print(f"{txs=}")
 
         if c.name not in ranges:
             ranges[c.name] = []
@@ -270,6 +275,7 @@ def GTF_from_model(
 
             end_fragment = new_end_fragment
 
+    print(f"{ranges=}")
     for seq in ranges:
         phase = -1
         for tx in ranges[seq]:
@@ -277,35 +283,37 @@ def GTF_from_model(
             t_id = f'g{tx_id}.t1'
             g_id = f'g{tx_id}'
             phase = 0
-            annotation.add_transcript(t_id, g_id, seq, strand)
-            annotation.add_gene(g_id, t_id)
             for r in tx:
-                annotation.transcripts[t_id].add(GTFEntry(
-                    name=seq,
-                    source=model_name,
-                    feature=r.name,
-                    start=r.start,
-                    end=r.end,
-                    score='.',
-                    strand=strand,
-                    frame=str(phase),  # type: ignore
-                    attributes=f'gene_id "{g_id}"; transcript_id "{t_id}";',
-                ))
+                annotation.add(
+                    GTFEntry(
+                        name=seq,
+                        source=model_name,
+                        feature=FeatureType(r.name),
+                        start=r.start,
+                        end=r.end,
+                        score=None,
+                        strand=strand,
+                        frame=phase,  # type: ignore
+                        attributes=f"gene_id \"{g_id}\"; "
+                                   f"transcript_id \"{t_id}\";",
+                    ),
+                    gene_id=g_id,
+                    transcript_id=t_id,
+                )
                 if r.name == 'CDS':
                     phase = (3 - (r.end - r.start + 1 - phase) % 3) % 3
 
     remove_tx = []
-    for tx in annotation.transcripts.values():
-        tx.check_splits()
-        if filter_transcripts and tx.get_cds_len() < 201:
-            remove_tx.append(tx.id)
-        else:
-            tx.redo_phase()
+    for gene in annotation.genes.values():
+        for tx in gene.transcripts.values():
+            tx.check_splits()
+            if filter_transcripts and tx.get_cds_len() < 201:
+                remove_tx.append((gene.id, tx.id))
+            else:
+                tx.redo_phase()
 
-    for tx in remove_tx:
-        annotation.transcripts.pop(tx)
+    for g_id, t_id in remove_tx:
+        annotation.genes[g_id].transcripts.pop(t_id)
 
-    annotation.norm_transcripts()
-    annotation.find_genes()
-
+    annotation.finalize()
     return annotation

@@ -1,14 +1,29 @@
+import bisect
+import re
+from enum import Enum
 from typing import Literal
 
 from .fasta import Region
 
 
+class FeatureType(Enum):
+
+    CDS = "CDS"
+    Exon = "exon"
+    Gene = "gene"
+    Intron = "intron"
+    Transcript = "transcript"
+    StartCodon = "start_codon"
+    StopCodon = "stop_codon"
+    Unknown = ""
+
+
 class GTFEntry(Region):
 
     source: str
-    feature: str
-    score: int | Literal["."]
-    frame: Literal["0", "1", "2", "."]
+    feature: FeatureType
+    score: int | None = None
+    frame: Literal[0, 1, 2] | None = None
     attributes: str
 
     @staticmethod
@@ -16,12 +31,12 @@ class GTFEntry(Region):
         return GTFEntry(
             name=line[0],
             source=line[1],
-            feature=line[2],
+            feature=FeatureType(line[2]),
             start=int(line[3]),
             end=int(line[4]),
-            score=int(line[5]) if line[5] != "." else ".",
+            score=int(line[5]) if line[5] != "." else None,
             strand=line[6],  # type: ignore
-            frame=line[7],  # type: ignore
+            frame=int(line[7]) if line[7] != "." else None,  # type: ignore
             attributes=line[8],
         )
 
@@ -29,14 +44,23 @@ class GTFEntry(Region):
         return [
             self.name,
             self.source,
-            self.feature,
+            self.feature.value,
             self.start,
             self.end,
-            self.score,
+            self.score if self.score is not None else ".",
             self.strand,
-            self.frame,
+            self.frame if self.frame is not None else ".",
             self.attributes,
         ]
+
+    def attribute(self, key: str) -> str:
+        pattern = rf'\b{re.escape(key)}\s+"([^"]*)";'
+        match = re.search(pattern, self.attributes)
+        if match:
+            return match.group(1).strip()
+        raise AttributeError(
+            f"Attribute {key!r} not found in {self.feature!r}"
+        )
 
     def __eq__(self, other) -> bool:
         if isinstance(other, GTFEntry):
@@ -51,8 +75,8 @@ class Transcript:
         id (str): The identifier of the transcript.
         gene_id (str): The identifier of the gene the transcript is
             synthesized from.
-        chr (str): The name of the sequence or chromosome the transcript
-            is coming from.
+        seqname (str): The name of the sequence or chromosome the
+            transcript is coming from.
         strand (str, optional): Strand (+/-) on which the transctipt is
             located. Defaults to +.
     """
@@ -61,13 +85,13 @@ class Transcript:
         self,
         id: str,
         gene_id: str,
-        chr: str,
+        seqname: str,
         strand: Literal["+", "-"] = "+",
     ) -> None:
         self.id = id
-        self.chr = chr
+        self.seqname = seqname
         self.gene_id = gene_id
-        self.entries: dict[str, list[GTFEntry]] = {}
+        self.entries: dict[FeatureType, list[GTFEntry]] = {}
         self.start = -1
         self.end = -1
         self.cds_len = -1
@@ -75,37 +99,40 @@ class Transcript:
         self.source = ""
 
     def add(self, entry: GTFEntry | list[str]) -> None:
-        """Add a :class:`GTFEntry` object to the transcript."""
+        """Adds a :class:`GTFEntry` object to the transcript."""
         entry = GTFEntry.from_list(entry) if isinstance(entry, list) else entry
-        if not (entry.name == self.chr or entry.strand == self.strand):
+        if not (
+            entry.name == self.seqname
+            and entry.strand == self.strand
+            and self.gene_id == entry.attribute("gene_id")
+        ):
             raise RuntimeError(
-                "File is not in gtf format. "
-                f"Error in line {entry}\n"
-                "Transcript ID is not unique"
+                f"Entry {entry} does not match current transcript description"
             )
 
         if entry.feature not in self.entries:
             self.entries[entry.feature] = []
+        bisect.insort(
+            self.entries[entry.feature],
+            entry,
+            key=lambda x: x.start,
+        )
 
         if self.start < 0 or entry.start < self.start:
             self.start = entry.start
         if self.end < 0 or entry.end > self.end:
             self.end = entry.end
-
-        if self.gene_id == "" and entry.feature != 'transcript':
-            self.gene_id = entry.attributes.split(
-                'gene_id "'
-            )[1].split('";')[0]
-
-        self.entries[entry.feature].append(entry)
         self.source = entry.source
 
-    def coords_per_frame(self, type: str) -> dict[str, list[tuple[int, int]]]:
+    def coords_per_frame(
+        self,
+        type: FeatureType,
+    ) -> dict[str, list[tuple[int, int]]]:
         """Get the coordinates of the regions of given type per reading
         frame.
 
         Args:
-            type (str): The type of feature to extract from the
+            type (FeatureType): The type of feature to extract from the
                 transcript.
         Returns:
             dict[str,list[tuple[int,int]]]: Dictionary mapping frame
@@ -115,27 +142,26 @@ class Transcript:
         """
         coords = {'0' : [], '1' : [], '2' : [], '.' : []}
 
-        if type == 'CDS' and type not in self.entries.keys():
-            type = 'exon'
-        if type not in self.entries.keys():
+        if type == FeatureType.CDS and type not in self.entries:
+            type = FeatureType.Exon
+        if type not in self.entries:
             return coords
 
         for entry in self.entries[type]:
-            coords[entry.frame].append([entry.start, entry.end])
-
-        for k in coords.keys():
-            coords[k].sort(key=lambda c: (c[0], c[1]))
-        if type == 'CDS':
+            coords["." if entry.frame is None else str(entry.frame)].append(
+                (entry.start, entry.end)
+            )
+        if type == FeatureType.CDS:
             coords['0'] += coords['.']
             del coords['.']
 
         return coords
 
-    def coords(self, type: str) -> list[tuple[int, int]]:
+    def coords(self, type: FeatureType) -> list[tuple[int, int]]:
         """Get the coordinates of the regions of given type.
 
         Args:
-            type (str): The type of feature to extract from the
+            type (FeatureType): The type of feature to extract from the
                 transcript.
         Returns:
             list[tuple[int,int]]: List of integer ranges ``(start,
@@ -143,84 +169,73 @@ class Transcript:
                 type.
         """
         coords = []
-        if type == 'CDS' and type not in self.entries.keys():
-            type = 'exon'
-        if type not in self.entries.keys():
+        if type == FeatureType.CDS and type not in self.entries.keys():
+            type = FeatureType.Exon
+        if type not in self.entries:
             return coords
 
         for entry in self.entries[type]:
-            coords.append([entry.start, entry.end])
-
-        coords.sort(key=lambda c: (c[0], c[1]))
+            coords.append((entry.start, entry.end))
         return coords
 
     def get_cds_len(self):
-        cds = self.coords('CDS')
+        cds = self.coords(FeatureType.CDS)
         return sum([c[1] - c[0] + 1 for c in cds])
 
-    def get_cds_coords(self) -> dict[str, list[list[int]]]:
+    def get_cds_coords(self) -> dict[str, list[tuple[int, int]]]:
         """Get the coordinates and reading frame of the coding regions
 
         Returns:
-            dict[str,list[list[int]]]: Dictionary with list of CDS
+            dict[str,list[tuple[int,int]]]: Dictionary with list of CDS
                 coords for each each frame phase (0, 1, 2).
         """
         cds_coords = {'0' : [], '1' : [], '2' : []}
 
-        if 'CDS' in self.entries.keys():
-            key = 'CDS'
+        if FeatureType.CDS in self.entries:
+            key = FeatureType.CDS
         else:
-            key = 'exon'
+            key = FeatureType.Exon
 
         for entry in self.entries[key]:
-            cds_coords[entry.frame].append([entry.start, entry.end])
-        for k in cds_coords.keys():
-            cds_coords[k].sort(key=lambda c: (c[0], c[1]))
-
+            frame = "." if entry.frame is None else str(entry.frame)
+            cds_coords[frame].append((entry.start, entry.end))
         return cds_coords
 
-    def add_missing_lines(self) -> bool:
+    def finalize(self) -> bool:
         """Add transcript, intron, CDS, exon coordinates if they were
         not included in the gtf file.
 
         Returns:
             bool: False if no cds were found for the tx, True otherwise.
         """
-        self.find_introns()
-        if not self.check_cds_exons():
+        if (FeatureType.CDS not in self.entries
+                and FeatureType.Exon not in self.entries):
             return False
+        self.find_introns()
         self.find_transcript()
         self.find_start_stop_codon()
         return True
 
-    def check_cds_exons(self) -> bool:
-        """Check if the transcript has CDS or exons."""
-        if ('CDS' not in self.entries and 'exon' not in self.entries):
-            print(f'Skipping transcript {self.id}, no CDS nor exons')
-            return False
-        return True
-
     def find_introns(self) -> None:
-        """Add intron lines."""
-        if 'intron' not in self.entries:
-            self.entries.update({'intron' : []})
-            key = ''
+        """Add intron lines if none were given to this transcript."""
+        if FeatureType.Intron not in self.entries:
+            self.entries[FeatureType.Intron] = []
 
-            if 'CDS' in self.entries.keys():
-                key = 'CDS'
-            elif 'exon' in self.entries.keys():
-                key = 'exon'
+            key = None
+            if FeatureType.CDS in self.entries.keys():
+                key = FeatureType.CDS
+            elif FeatureType.Exon in self.entries.keys():
+                key = FeatureType.Exon
 
-            if key:
+            if key is not None:
                 exon_lst: list[GTFEntry] = []
                 for line in self.entries[key]:
                     exon_lst.append(line)
-                exon_lst = sorted(exon_lst, key=lambda e: e.name)
                 for i in range(1, len(exon_lst)):
                     intron = GTFEntry(
                         name=exon_lst[i].name,
                         source=exon_lst[i].source,
-                        feature="intron",
+                        feature=FeatureType.Intron,
                         start=exon_lst[i-1].end + 1,
                         end=exon_lst[i].start - 1,
                         score=exon_lst[i].score,
@@ -229,11 +244,11 @@ class Transcript:
                         attributes=f"gene_id \"{self.gene_id}\"; "
                                    f"transcript_id \"{self.id}\";",
                     )
-                    self.entries['intron'].append(intron)
+                    self.add(intron)
 
     def find_transcript(self) -> None:
         """Add transcript lines."""
-        if not 'transcript' in self.entries.keys():
+        if FeatureType.Transcript not in self.entries:
             for key in self.entries.keys():
                 for entry in self.entries[key]:
                     if entry.start < self.start or self.start < 0:
@@ -241,106 +256,94 @@ class Transcript:
                     if entry.end > self.end:
                         self.end = entry.end
             entry = GTFEntry(
-                name=self.chr,
+                name=self.seqname,
                 source=entry.source,
-                feature='transcript',
+                feature=FeatureType.Transcript,
                 start=self.start,
                 end=self.end,
-                score='.',
+                score=None,
                 strand=entry.strand,
-                frame='.',
-                attributes=self.id,
+                frame=None,
+                attributes=f"gene_id \"{self.gene_id}\"; "
+                            f"transcript_id \"{self.id}\";",
             )
             self.add(entry)
 
     def find_start_stop_codon(self) -> None:
         """Add start/stop codon lines."""
-
-        if not 'start_codon' in self.entries:
-            self.entries.update({'start_codon' : []})
-        if not 'stop_codon' in self.entries:
-            self.entries.update({'stop_codon' : []})
-
         key = None
-        if 'CDS' in self.entries:
-            key = 'CDS'
-        elif 'exon' in self.entries:
-            key = 'exon'
+        if FeatureType.CDS in self.entries:
+            key = FeatureType.CDS
+        elif FeatureType.Exon in self.entries:
+            key = FeatureType.Exon
         if key is None:
             return
 
-        self.entries[key].sort(key = lambda x: x.start)
         tx = self.entries[key][0]
         line1 = GTFEntry(
-            name=self.chr,
+            name=self.seqname,
             source=tx.source,
-            feature="",
+            feature=FeatureType.Unknown,
             start=tx.start,
             end=tx.start + 2,
-            score='.',
+            score=None,
             strand=self.strand,
-            frame='0',
+            frame=0,
             attributes=f"gene_id \"{self.gene_id}\"; "
                         f"transcript_id \"{self.id}\";",
         )
         tx = self.entries[key][-1]
         line2 = GTFEntry(
-            name=self.chr,
+            name=self.seqname,
             source=tx.source,
-            feature='',
+            feature=FeatureType.Unknown,
             start=tx.end - 2,
             end=tx.end,
-            score='.',
+            score=None,
             strand=self.strand,
-            frame='0',
+            frame=0,
             attributes=f"gene_id \"{self.gene_id}\"; "
                         f"transcript_id \"{self.id}\";",
         )
 
-        fragmented_transcript = True
+        fragmented = True
         if tx.strand == '+':
-            line1.feature = 'start_codon'
-            line2.feature = 'stop_codon'
+            line1.feature = FeatureType.StartCodon
+            line2.feature = FeatureType.StopCodon
             if self.entries[key][0].frame == 0:
-                fragmented_transcript = False
+                fragmented = False
             start = line1
             stop = line2
         else:
-            line1.feature = 'stop_codon'
-            line2.feature = 'start_codon'
+            line1.feature = FeatureType.StopCodon
+            line2.feature = FeatureType.StartCodon
             if self.entries[key][-1].frame == 0:
-                fragmented_transcript = False
+                fragmented = False
             stop = line1
             start = line2
-        if ('start_codon' not in self.entries.keys()
-                and not fragmented_transcript):
-            if not fragmented_transcript:
-                self.add(start)
-            else:
-                self.entries.update({'start_codon' : []})
-        if 'stop_codon' not in self.entries.keys():
+        if FeatureType.StartCodon not in self.entries and not fragmented:
+            self.add(start)
+        if FeatureType.StopCodon not in self.entries:
             self.add(stop)
 
     def redo_phase(self) -> None:
-        if 'CDS' in self.entries:
-            self.entries['CDS'] = sorted(
-                self.entries['CDS'],
-                key=lambda x: x.start,
+        if FeatureType.CDS in self.entries:
+            self.entries[FeatureType.CDS] = sorted(
+                self.entries[FeatureType.CDS],
+                key=lambda x: (x.start, x.end),
                 reverse=(self.strand == '-'),
             )
             phase = 0
-            for line in self.entries['CDS']:
-                line.frame = str(phase)  # type: ignore
+            for line in self.entries[FeatureType.CDS]:
+                line.frame = phase  # type: ignore
                 phase = (3 - (line.end - line.start + 1 - phase) % 3) % 3
 
     def check_splits(self) -> None:
-        for k in self.entries.keys():
-            self.entries[k] = sorted(
-                self.entries[k],
-                key=lambda x: x.start,
-            )
+        for k in self.entries:
             new_list = [self.entries[k][0]]
             for i in range(1, len(self.entries[k])):
+                # TODO what if two exons are in different phases?
+                # -> they will still be merged...
                 if new_list[-1].end == self.entries[k][i].start-1:
                     new_list[-1].end = self.entries[k][i].end
                 else:
@@ -357,15 +360,18 @@ class Transcript:
         if prefix:
             prefix += '.'
         tx_line: GTFEntry | None = None
-        for k in self.entries.keys():
+        for k in self.entries:
             for i, entry in enumerate(self.entries[k]):
 
-                if k == 'transcript':
+                if k == FeatureType.Transcript:
                     tx_line = entry
-                    tx_line.attributes = prefix + self.id
+                    tx_line.attributes = (
+                        f"gene_id \"{self.gene_id}\"; "
+                        f"transcript_id \"{prefix + self.id}\";"
+                    )
                     continue
 
-                elif k == 'CDS':
+                elif k == FeatureType.CDS:
                     cds_type = 'internal'
                     if len(self.entries[k]) == 1:
                         cds_type = 'single'
@@ -379,28 +385,30 @@ class Transcript:
                             or (i == 0 and self.strand == '-')
                     ):
                         cds_type = 'terminal'
+                    # TODO why is cds_type formatted differently?
                     entry.attributes = (
-                        f"transcript_id \"{prefix + self.id}\"; "
                         f"gene_id \"{self.gene_id}\"; "
+                        f"transcript_id \"{prefix + self.id}\"; "
                         f"cds_type={cds_type};"
                     )
 
-                elif k not in ['transcript', 'gene']:
+                elif k not in [FeatureType.Transcript, FeatureType.Gene]:
                     entry.attributes = (
-                        f"transcript_id \"{prefix + self.id}\"; "
                         f"gene_id \"{self.gene_id}\"; "
+                        f"transcript_id \"{prefix + self.id}\";"
                     )
 
                 gtf.append(entry)
 
-        if 'exon' not in self.entries.keys():
-            for entry in self.entries['CDS']:
-                gtf.append(
-                    GTFEntry(**(entry.model_dump() | {"feature": "exon"}))
-                )
+        if FeatureType.Exon not in self.entries:
+            # TODO is exon and CDS interchangable? or is only one of
+            # them needed for output?
+            for entry in self.entries[FeatureType.CDS]:
+                gtf.append(GTFEntry(
+                    **(entry.model_dump() | {"feature": FeatureType.Exon})
+                ))
 
-        gtf = sorted(gtf, key=lambda entry: (entry.start, entry.end))
+        gtf.sort(key=lambda x: (x.start, x.end))
         if tx_line is not None:
             gtf = [tx_line] + gtf
-
         return gtf
