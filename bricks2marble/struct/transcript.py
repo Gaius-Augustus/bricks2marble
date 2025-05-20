@@ -62,6 +62,23 @@ class GTFEntry(Region):
             f"Attribute {key!r} not found in {self.feature!r}"
         )
 
+    def same_as(
+        self,
+        entry: "GTFEntry",
+        borders: bool = True,
+        attributes: bool = True
+    ) -> bool:
+        comp = (self.name == entry.name and self.source == entry.source
+                and self.feature == entry.feature and self.score == entry.score
+                and self.strand == entry.strand and self.frame == entry.frame)
+        if attributes:
+            comp = comp and (self.attributes == entry.attributes)
+        if borders:
+            comp = comp and (
+                self.start == entry.start and self.end == entry.end
+            )
+        return comp
+
     def __eq__(self, other) -> bool:
         if isinstance(other, GTFEntry):
             return super().__eq__(other)
@@ -91,6 +108,11 @@ class Transcript:
         self.id = id
         self.seqname = seqname
         self.gene_id = gene_id
+        # TODO change to:
+        # self.entries: list[GTFEntry] = []
+        # self.features: dict[FeatureType, list[int]] = {
+        #     t: [] for t in FeatureType
+        # }
         self.entries: dict[FeatureType, list[GTFEntry]] = {}
         self.start = -1
         self.end = -1
@@ -112,11 +134,20 @@ class Transcript:
 
         if entry.feature not in self.entries:
             self.entries[entry.feature] = []
-        bisect.insort(
+        insort_index = bisect.bisect(
             self.entries[entry.feature],
-            entry,
-            key=lambda x: x.start,
+            (entry.start, entry.end),
+            key=lambda x: (x.start, x.end),
         )
+        if insort_index >= len(self.entries[entry.feature]):
+            self.entries[entry.feature].insert(insort_index, entry)
+        elif entry.same_as(
+            self.entries[entry.feature][insort_index],
+            borders=False,
+        ) and entry.start - 1 == self.entries[entry.feature][insort_index].end:
+            self.entries[entry.feature][insort_index].end = entry.end
+        else:
+            self.entries[entry.feature].insert(insort_index, entry)
 
         if self.start < 0 or entry.start < self.start:
             self.start = entry.start
@@ -214,6 +245,7 @@ class Transcript:
         self.find_introns()
         self.find_transcript()
         self.find_start_stop_codon()
+        self.fix_cds_frames()
         return True
 
     def find_introns(self) -> None:
@@ -247,7 +279,7 @@ class Transcript:
                     self.add(intron)
 
     def find_transcript(self) -> None:
-        """Add transcript lines."""
+        """Add an entry for the transcript itself if missing."""
         if FeatureType.Transcript not in self.entries:
             for key in self.entries.keys():
                 for entry in self.entries[key]:
@@ -270,7 +302,11 @@ class Transcript:
             self.add(entry)
 
     def find_start_stop_codon(self) -> None:
-        """Add start/stop codon lines."""
+        """Add start- and stop-codon entries if they are missing."""
+        if (FeatureType.StartCodon in self.entries
+                and FeatureType.StopCodon in self.entries):
+            return
+
         key = None
         if FeatureType.CDS in self.entries:
             key = FeatureType.CDS
@@ -326,19 +362,18 @@ class Transcript:
         if FeatureType.StopCodon not in self.entries:
             self.add(stop)
 
-    def redo_phase(self) -> None:
+    def fix_cds_frames(self) -> None:
+        """Forces frames of the CDS entries in the transcript to be
+        3-periodic.
+        """
         if FeatureType.CDS in self.entries:
-            self.entries[FeatureType.CDS] = sorted(
-                self.entries[FeatureType.CDS],
-                key=lambda x: (x.start, x.end),
-                reverse=(self.strand == '-'),
-            )
             phase = 0
             for line in self.entries[FeatureType.CDS]:
                 line.frame = phase  # type: ignore
                 phase = (3 - (line.end - line.start + 1 - phase) % 3) % 3
 
-    def check_splits(self) -> None:
+    def _check_splits(self) -> None:
+        # method obsolete, will be checked at insert
         for k in self.entries:
             new_list = [self.entries[k][0]]
             for i in range(1, len(self.entries[k])):
