@@ -17,6 +17,7 @@ dependencies = ["numpy", "pydantic"]
 
 [project.optional-dependencies]
 test = ["pytest"]
+tf = ["learnMSA"]
 
 [project.urls]
 Homepage = "https://github.com/gaius-augustus/bricks2marble"
