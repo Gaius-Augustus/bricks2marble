@@ -53,5 +53,5 @@ def load_fasta(
         ))
     fasta = FASTA(sequences)
     if T is not None:
-        fasta = fasta.resample(T)
+        fasta.resample(T)
     return fasta

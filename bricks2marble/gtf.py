@@ -1,3 +1,4 @@
+from timeit import default_timer
 from typing import Callable, Literal
 
 import numpy as np
@@ -27,6 +28,9 @@ def _split_regions(
     encoded_labels: np.ndarray,
     offset: int = 0,
 ) -> list[Region]:
+    """Splits a sequence of HMM states into a sequence of regions
+    "intergenic", "intron" or "CDS".
+    """
     arr = np.array(encoded_labels)
     arr = HMM_STATE_AGGREGATION.argmax(1)[arr]
     arr[(arr > 1)] = 2
@@ -156,128 +160,32 @@ def _merge_reprediction(
         return all_tx[:overlap1] + new_tx[overlap2:]
 
 
-def GTF_from_model(
-    fasta: FASTA,
-    predict_func: Callable[[FASTA], np.ndarray],
+def _annotation_from_dict(
+    entries_fwd: dict[str, list[list[Region]]],
+    entries_bwd: dict[str, list[list[Region]]],
     model_name: str = "Model",
-    strand: Literal["+", "-"] = "+",
-    tx_id: int = 0,
-    filter_transcripts: bool = True,
 ) -> Annotation:
-    """Generate a genome annotation using a nucleotide sequence and a
-    function that outputs feature labels of regions of interest.
-
-    Args:
-        fasta (FASTA): A :class:`FASTA` object containing the nucleotide
-            sequences of interest.
-        predict_func (Callable): A function that takes a :class:`FASTA`
-            object as input and outputs a numpy array of shape ``(B, T,
-            D)``.
-        model_name (str): Name of the model that is used, or any other
-            identifier. This will only be listed as the 'source' in the
-            GTF file.
-        strand ("+" or "-"): Whether the annotation is for the forward
-            or backward strand. Defaults to "+".
-        tx_id (int): ? # TODO
-        filter_transcripts (bool): ? # TODO
-    """
     annotation = Annotation()
-    ranges: dict[str, list[list[Region]]] = {}
-
-    labels = predict_func(fasta)
-
-    repred_seqs = []
-    repred_index = []
-
-    for i in range(labels.shape[0]-1):
-        if (fasta.segments[i].name == fasta.segments[i+1].name
-                and labels[i, -1] != labels[i+1, 0]):
-            repred_seqs.append(Sequence(
-                np.concatenate(
-                    (fasta.nuc[i], fasta.nuc[i+1]),
-                    axis=0,
-                ),
-                name=fasta.segments[i].name,
-                start=fasta.segments[i].start,
-                end=fasta.segments[i+1].end,
-            ))
-            repred_index.append(i)
-
-    if len(repred_seqs) > 0:
-        repred_out = predict_func(FASTA(repred_seqs))
-
-    re_txs = None
-    end_fragment = []
-
-    for i, (y, c) in enumerate(zip(labels, fasta.segments)):
-        regions = _split_regions(y, c.start)
-        is_ir = 'intergenic' in [r.name for r in regions]
-        coord_diff = 0 if i == 0 else (c.end - fasta.segments[i-1].start)
-        start_fragment, txs, new_end_fragment = _transcripts_from_regions(
-            regions
-        )
-
-        if c.name not in ranges:
-            ranges[c.name] = []
-
-        # if the start of the first fragmented tx matches the fragment
-        # from the last chunk, combine them
-        if (not re_txs and is_ir and end_fragment and start_fragment
-                and labels[i-1, -1] == labels[i, 0]):
-            end_fragment[-1].start = start_fragment[0].start
-            end_fragment += start_fragment[1:]
-            ranges[c.name] += [end_fragment]
-
-        if is_ir and txs:
-            if re_txs:
-                ranges[c.name] = _merge_reprediction(
-                    ranges[c.name],
-                    txs,
-                    c.start + coord_diff//2,
-                )
-            else:
-                ranges[c.name] += txs
-        if is_ir:
-            end_fragment = new_end_fragment
-
-        re_txs = None
-        if repred_index and i == repred_index[0]:
-            repred_index.pop(0)
-            c_re = Region(
-                name=c.name,
-                start=c.start,
-                end=c.end+coord_diff,
-                strand=strand,  # TODO unsure
-            )
-            current_re = repred_out[0]
-            repred_out = repred_out[1:]
-            if c_re.strand == '-':
-                current_re = current_re[::-1]
-            re_ranges = _split_regions(current_re, c_re.start)
-            start_fragment, re_txs, new_end_fragment = (
-                _transcripts_from_regions(re_ranges)
-            )
-
-            if (not is_ir and end_fragment and start_fragment \
-                    and labels[i-1,-1] == current_re[0]):
-                end_fragment[-1].end = start_fragment[0].end
-                end_fragment += start_fragment[1:]
-                ranges[c.name] += [end_fragment]
-            if re_txs:
-                ranges[c.name] = _merge_reprediction(
-                    ranges[c.name],
-                    re_txs,
-                    c_re.end + coord_diff//2,
-                )
-
-            end_fragment = new_end_fragment
-
-    for seq in ranges:
+    tx_id = 0
+    for seq in entries_fwd:
         phase = -1
-        for tx in ranges[seq]:
+        while len(entries_fwd[seq]) + len(entries_bwd[seq]) > 0:
+            fwd = False
+            if len(entries_fwd[seq]) > 0 and len(entries_bwd[seq]) > 0 and (
+                entries_fwd[seq][0][0].start >= entries_bwd[seq][0][0].start
+            ):
+                fwd = True
+            elif len(entries_fwd[seq]) > 0:
+                fwd = True
+
+            if fwd:
+                tx = entries_fwd[seq].pop(0)
+            else:
+                tx = entries_bwd[seq].pop(0)
+
             tx_id += 1
-            t_id = f'g{tx_id}.t1'
-            g_id = f'g{tx_id}'
+            t_id = f"g{tx_id}.t1"
+            g_id = f"g{tx_id}"
             phase = 0
             for r in tx:
                 annotation.add(
@@ -288,28 +196,236 @@ def GTF_from_model(
                         start=r.start,
                         end=r.end,
                         score=None,
-                        strand=strand,
+                        strand="+" if fwd else "-",
                         frame=phase,  # type: ignore
                         attributes=f"gene_id \"{g_id}\"; "
                                    f"transcript_id \"{t_id}\";",
                     ),
                     gene_id=g_id,
+                    strand="+" if fwd else "-",
                     transcript_id=t_id,
                 )
-                if r.name == 'CDS':
+                if r.name == "CDS":
                     phase = (3 - (r.end - r.start + 1 - phase) % 3) % 3
+    return annotation
 
-    # remove_tx = []
-    # for gene in annotation.genes.values():
-    #     for tx in gene.transcripts.values():
-    #         tx.check_splits()
-    #         if filter_transcripts and tx.get_cds_len() < 201:
-    #             remove_tx.append((gene.id, tx.id))
-    #         else:
-    #             tx.redo_phase()
 
-    # for g_id, t_id in remove_tx:
-    #     annotation.genes[g_id].transcripts.pop(t_id)
+def GTF_from_model(
+    fasta: FASTA,
+    predict_func: Callable[[FASTA],
+        tuple[np.ndarray, np.ndarray | None]
+        | tuple[np.ndarray | None, np.ndarray]
+        | tuple[np.ndarray, np.ndarray],
+    ],
+    model_name: str = "Model",
+    verbose: bool = True,
+) -> Annotation:
+    """Generate a genome annotation using a nucleotide sequence and a
+    function that outputs feature labels of regions of interest.
 
+    Args:
+        fasta (FASTA): A :class:`FASTA` object containing the nucleotide
+            sequences of interest.
+        predict_func (Callable): A function that takes a :class:`FASTA`
+            object as input and outputs one or two numpy arrays. Each of
+            these array has to have shape ``(N, T)``, where ``N`` is
+            the number of sequences in the given `fasta` and ``T`` is
+            its chunk size. The output should be integers of states from
+            the :class:`bricks2marble.tf.HMM`. The first numpy array is
+            a prediction on the forward strand, the second a prediction
+            on the reverse strand. One of them can be missing.
+        model_name (str): Name of the model that is used, or any other
+            identifier. This will only be listed as the 'source' in the
+            GTF file.
+    """
+    if verbose: start_time = default_timer()
+
+    if verbose: print(
+        f"[{default_timer()-start_time:.4f}s] Initial prediction...",
+        flush=True,
+    )
+
+    labels_fwd, labels_bwd = predict_func(fasta)
+
+    if verbose: print(
+        f"[{default_timer()-start_time:.4f}s] Finding errors in prediction...",
+        flush=True,
+    )
+
+    repred_seqs = []
+    repred_index = []
+    repred_strand = []
+    for i in range(fasta.N-1):
+        if (fasta.segments[i].name == fasta.segments[i+1].name):
+            fwd = bwd = False
+
+            if labels_fwd is not None and (
+                labels_fwd[i, -1] != labels_fwd[i+1, 0]
+            ):
+                fwd = True
+            if labels_bwd is not None and (
+                labels_bwd[i, -1] != labels_bwd[i+1, 0]
+            ):
+                bwd = True
+
+            if fwd or bwd:
+                repred_seqs.append(Sequence(
+                    np.concatenate(
+                        (fasta.nuc[i], fasta.nuc[i+1]),
+                        axis=0,
+                    ),
+                    name=fasta.segments[i].name,
+                    start=fasta.segments[i].start,
+                    end=fasta.segments[i+1].end,
+                ))
+                repred_index.append(i)
+                repred_strand.append(int(fwd)+int(bwd))
+
+    if len(repred_seqs) > 0:
+        if verbose: print(
+            f"[{default_timer()-start_time:.4f}s] Found {len(repred_seqs)} "
+            "sequence pairs with mismatching intersections. Repredicting...",
+            flush=True,
+        )
+        repred_fwd, repred_bwd = predict_func(FASTA(repred_seqs))
+
+    if verbose: print(
+        f"[{default_timer()-start_time:.4f}s] Start forming regions...",
+        flush=True,
+    )
+
+    entries_fwd: dict[str, list[list[Region]]] = {}
+    entries_bwd: dict[str, list[list[Region]]] = {}
+    re_txs_f = None
+    re_txs_b = None
+    last_end_f = []
+    last_end_b = []
+    for i, segment in enumerate(fasta.segments):
+
+        coord_diff = 0 if i == 0 else (segment.end - fasta.segments[i-1].start)
+
+        if labels_fwd is not None:
+            regions_fwd = _split_regions(labels_fwd[i], segment.start)
+            start_f, txs_f, end_f = _transcripts_from_regions(regions_fwd)
+            if segment.name not in entries_fwd: entries_fwd[segment.name] = []
+
+            is_ir_f = 'intergenic' in [r.name for r in regions_fwd]
+            if (not re_txs_f is not None and is_ir_f and start_f and end_f
+                    and labels_fwd[i-1, -1] == labels_fwd[i, 0]):
+                last_end_f[-1].start = start_f[0].start
+                last_end_f += start_f[1:]
+                entries_fwd[segment.name] += [last_end_f]
+
+            if is_ir_f and txs_f:
+                if re_txs_f is not None:
+                    entries_fwd[segment.name] = _merge_reprediction(
+                        entries_fwd[segment.name],
+                        txs_f,
+                        segment.start + coord_diff//2,
+                    )
+                else:
+                    entries_fwd[segment.name] += txs_f
+            if is_ir_f:
+                last_end_f = end_f
+
+        if labels_bwd is not None:
+            regions_bwd = _split_regions(labels_bwd[i], segment.start)
+            start_b, txs_b, end_b = _transcripts_from_regions(regions_bwd)
+            if segment.name not in entries_bwd: entries_bwd[segment.name] = []
+
+            is_ir_b = 'intergenic' in [r.name for r in regions_bwd]
+            if (not re_txs_b is not None and is_ir_b and start_b and end_b
+                    and labels_bwd[i-1, -1] == labels_bwd[i, 0]):
+                last_end_b[-1].start = start_b[0].start
+                last_end_b += start_b[1:]
+                entries_bwd[segment.name] += [last_end_b]
+
+            if is_ir_b and txs_b:
+                if re_txs_b is not None:
+                    entries_bwd[segment.name] = _merge_reprediction(
+                        entries_bwd[segment.name],
+                        txs_b,
+                        segment.start + coord_diff//2,
+                    )
+                else:
+                    entries_bwd[segment.name] += txs_b
+            if is_ir_b:
+                last_end_b = end_b
+
+        re_txs_f = None
+        re_txs_b = None
+        if repred_index and i == repred_index[0]:
+            repred_index.pop(0)
+            strand = repred_strand.pop(0)
+
+            if strand == 0 or strand == 2:
+                c_re = Region(
+                    name=segment.name,
+                    start=segment.start,
+                    end=segment.end+coord_diff,
+                    strand="+",  # TODO unsure
+                )
+                current_re = repred_fwd[0]
+                repred_fwd = repred_fwd[1:]
+                re_ranges = _split_regions(current_re, c_re.start)
+                start_f, re_txs, end_f = _transcripts_from_regions(re_ranges)
+
+                if (not is_ir_f and last_end_f and start_f
+                        and labels_fwd[i-1, -1] == current_re[0]):
+                    last_end_f[-1].end = start_f[0].end
+                    last_end_f += start_f[1:]
+                    entries_fwd[segment.name] += [last_end_f]
+                if re_txs:
+                    entries_fwd[segment.name] = _merge_reprediction(
+                        entries_fwd[segment.name],
+                        re_txs,
+                        c_re.end + coord_diff//2,
+                    )
+                last_end_f = end_f
+
+            if strand == 1 or strand == 2:
+                c_re = Region(
+                    name=segment.name,
+                    start=segment.start,
+                    end=segment.end+coord_diff,
+                    strand="-",  # TODO unsure
+                )
+                current_re = repred_bwd[0]
+                repred_bwd = repred_bwd[1:]
+                re_ranges = _split_regions(current_re, c_re.start)
+                start_b, re_txs, end_b = _transcripts_from_regions(re_ranges)
+
+                if (not is_ir_b and last_end_b and start_b
+                        and labels_bwd[i-1, -1] == current_re[0]):
+                    last_end_b[-1].end = start_b[0].end
+                    last_end_b += start_b[1:]
+                    entries_bwd[segment.name] += [last_end_f]
+                if re_txs:
+                    entries_bwd[segment.name] = _merge_reprediction(
+                        entries_bwd[segment.name],
+                        re_txs,
+                        c_re.end + coord_diff//2,
+                    )
+                last_end_f = end_f
+
+    if verbose: print(
+        f"[{default_timer()-start_time:.4f}s] Creating GTF entries...",
+        flush=True,
+    )
+
+    annotation = _annotation_from_dict(
+        entries_fwd,
+        entries_bwd,
+        model_name=model_name,
+    )
+
+    if verbose: print(
+        f"[{default_timer()-start_time:.4f}s] Finalize...",
+        flush=True,
+    )
     annotation.finalize()
+    if verbose: print(
+        f"[{default_timer()-start_time:.4f}s] Done.",
+        flush=True,
+    )
     return annotation

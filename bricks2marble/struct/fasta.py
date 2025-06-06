@@ -24,6 +24,8 @@ class Segment(BaseModel):
     """A segment has a name and a defined range. It is typically used to
     determine the origin of a sequence of nucleotides within a greater
     context, e.g. a genome.
+    Counting starts at 0 and ends with T-1, like standard indexing in
+    Python.
     """
 
     name: str
@@ -116,7 +118,7 @@ class Sequence:
         else:
             non_padded = np.nonzero(self._sequence[-1] == -1)
             if non_padded[0].size > 0:
-                self._end = (self.N-1)*self.T + non_padded[0][0] + 1
+                self._end = (self.N-1)*self.T + non_padded[0][0]
             else:
                 self._end = self._sequence.size
             return self._end
@@ -125,10 +127,19 @@ class Sequence:
         return [
             Segment(
                 name=self.name,
-                start=self.start+(i-1)*self.T+1,
+                start=self.start+(i-1)*self.T,
                 end=min(self.start+i*self.T, self.start+self.size),
             ) for i in range(1, self.N+1)
         ]
+
+    def flatten(self) -> "Sequence":
+        """Sets the chunk size of this sequence to the total number of
+        nucleotides without padding.
+
+        This does not create a new sequence but overrides this one.
+        """
+        self.resample(self.size)
+        return self
 
     def one_hot(
         self,
@@ -150,11 +161,13 @@ class Sequence:
         return ENCODING[nuc]
 
     def resample(self, T: int) -> "Sequence":
-        """Returns a :class:`Sequence` that is grouped into chunks of
-        the given length. This can lead to differently padded sequences.
+        """Resamples this sequence into chunks of the given length. This
+        can lead to differently padded sequences.
+
+        It does not create a new sequence but overrides this one.
         """
         if T <= 0:
-            raise ValueError(f"Unallowed chunk size ({T})")
+            raise ValueError(f"Unallowed chunk size: {T}")
         missing = (-self.size) % T
         N = (self.size + missing) // T
         flattened = np.concatenate((
@@ -162,7 +175,8 @@ class Sequence:
             np.full(missing, -1, dtype=self._sequence.dtype),
         ))
         array = flattened.reshape(N, T)
-        return Sequence(array, name=self.name, start=self.start, end=self.end)
+        self._sequence = array
+        return self
 
     def positions(
         self,
@@ -221,6 +235,14 @@ class Sequence:
             probs[token] += (self.nuc == index).sum() / size
         return probs
 
+    def copy(self) -> "Sequence":
+        return Sequence(
+            self._sequence,
+            name=self.name,
+            start=self.start,
+            end=self.end,
+        )
+
     def __str__(self) -> str:
         return f"{self.name!r}[{self.start}:{self.end}]"
 
@@ -273,11 +295,15 @@ class FASTA:
         return self.nuc.shape[1]
 
     def resample(self, T: int) -> "FASTA":
-        """Returns a :class:`FASTA` object that has the same sequences
-        grouped into chunks of the given length. This can lead to
+        """Resamples the :class:`FASTA` object such that each sequence
+        is grouped into chunks of the given length. This can lead to
         differently padded sequences.
+        This method does not create a new FASTA object but is an
+        in-place operation.
         """
-        return FASTA([seq.resample(T) for seq in self._sequences])
+        for seq in self._sequences:
+            seq.resample(T)
+        return self
 
     def one_hot(
         self,

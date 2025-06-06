@@ -244,8 +244,8 @@ class Transcript:
             return False
         self.find_introns()
         self.find_transcript()
-        self.find_start_stop_codon()
         self.fix_cds_frames()
+        self.find_start_stop_codon()
         return True
 
     def find_introns(self) -> None:
@@ -368,9 +368,12 @@ class Transcript:
         """
         if FeatureType.CDS in self.entries:
             phase = 0
-            for line in self.entries[FeatureType.CDS]:
+            cds = self.entries[FeatureType.CDS]
+            if self.strand == "-":
+                cds = reversed(cds)
+            for line in cds:
                 line.frame = phase  # type: ignore
-                phase = (3 - (line.end - line.start + 1 - phase) % 3) % 3
+                phase = (3 - (line.end - line.start - phase) % 3) % 3
 
     def _check_splits(self) -> None:
         # method obsolete, will be checked at insert
@@ -433,17 +436,26 @@ class Transcript:
                         f"transcript_id \"{prefix + self.id}\";"
                     )
 
-                gtf.append(entry)
+                entry_copy = entry.model_copy()
+                entry_copy.start += 1
+                entry_copy.end += 1
+                gtf.append(entry_copy)
 
         if FeatureType.Exon not in self.entries:
             # TODO is exon and CDS interchangable? or is only one of
             # them needed for output?
             for entry in self.entries[FeatureType.CDS]:
-                gtf.append(GTFEntry(
+                exon = GTFEntry(
                     **(entry.model_dump() | {"feature": FeatureType.Exon})
-                ))
+                )
+                exon.start += 1
+                exon.end += 1
+                gtf.append(exon)
 
         gtf.sort(key=lambda x: (x.start, x.end))
         if tx_line is not None:
+            tx_line = tx_line.model_copy()
+            tx_line.start += 1
+            tx_line.end += 1
             gtf = [tx_line] + gtf
         return gtf

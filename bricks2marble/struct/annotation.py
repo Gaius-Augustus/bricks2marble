@@ -55,8 +55,8 @@ class Gene:
             name=gtf[-1].name,
             source=gtf[-1].source,
             feature=FeatureType.Gene,
-            start=self.start,
-            end=self.end,
+            start=self.start+1,
+            end=self.end+1,
             score=None,
             strand=self.strand,
             frame=None,
@@ -71,12 +71,15 @@ class Annotation:
     """
 
     def __init__(self) -> None:
-        self.genes: dict[str, Gene] = {}
+        self._genes: list[Gene] = []
+        self._gene_ids: dict[str, int] = {}
+        self._seq_ids: dict[str, list[int]] = {}
 
     def add(
         self,
         entry: GTFEntry | None = None,
         gene_id: str | None = None,
+        strand: Literal["+", "-"] = "+",
         transcript_id: str | None = None,
     ) -> None:
         """Adds the given entry to the gene with reported gene and
@@ -84,17 +87,24 @@ class Annotation:
         new gene.
         """
         if gene_id is not None:
-            if entry is None and gene_id in self.genes:
+            if entry is None and gene_id in self._gene_ids:
                 raise KeyError(f"Gene ID {gene_id!r} is not unique")
-            if gene_id not in self.genes:
-                self.genes[gene_id] = Gene(gene_id)
+
+            if gene_id not in self._gene_ids:
+                self._genes.append(Gene(gene_id, strand=strand))
+                self._gene_ids[gene_id] = len(self._genes) - 1
 
             if entry is not None:
                 if transcript_id is None:
                     raise ValueError(
-                        "If entry is given, transcript_id has to be supplied"
+                        "If entry is given, "
+                        "'transcript_id' has to be specified"
                     )
-                self.genes[gene_id].add(entry, transcript_id)
+                self._genes[self._gene_ids[gene_id]].add(entry, transcript_id)
+                if entry.name not in self._seq_ids:
+                    self._seq_ids[entry.name] = []
+                if self._gene_ids[gene_id] not in self._seq_ids[entry.name]:
+                    self._seq_ids[entry.name].append(self._gene_ids[gene_id])
         else:
             raise ValueError("gene_id has to be supplied")
 
@@ -103,7 +113,7 @@ class Annotation:
         coordinates if they were not included in the gtf file. Delete
         all transripts that have no exons or CDS.
         """
-        for gene in self.genes.values():
+        for gene in self._genes:
             gene.finalize()
 
     # def find_genes(self) -> None:
@@ -143,13 +153,6 @@ class Annotation:
     #             frame=None,
     #             attributes=tx.gene_id,
     #         )})
-
-    def get_transcripts(self) -> list[Transcript]:
-        """Returns a list of all transcripts."""
-        return [
-            tx for gene in self.genes.values()
-            for tx in gene.transcripts.values()
-        ]
 
     # def rename_transcript_ids(self, prefix: str = "") -> dict[str, str]:
     #     """Renames all transcripts and genes and returns translation
@@ -197,10 +200,7 @@ class Annotation:
     def to_list(self) -> list[GTFEntry]:
         """Returns a list of :class:`GTFEntry` objects."""
         gtf = []
-        for gene in sorted(
-            self.genes.values(),
-            key=lambda g: (g.id, g.start, g.end),
-        ):
+        for gene in self._genes:
             gtf.extend(gene.to_list())
         return gtf
 
