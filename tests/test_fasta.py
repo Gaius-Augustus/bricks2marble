@@ -61,15 +61,15 @@ def test_fasta(fasta_path: Path) -> None:
     )
 
     assert fasta.segments == [
-        b2m.struct.Segment(name="name abc", start=1, end=5),
-        ("name abc", 6, 10),
-        ("name abc", 11, 15),
-        ("name abc", 16, 20),
-        ("name abc", 21, 25),
-        ("name abc", 26, 27),
-        ("name def", 1, 5),
-        ("name def", 6, 10),
-        ("name def", 11, 11),
+        b2m.struct.Segment(name="name abc", start=0, end=5),
+        ("name abc", 5, 10),
+        ("name abc", 10, 15),
+        ("name abc", 15, 20),
+        ("name abc", 20, 25),
+        ("name abc", 25, 27),
+        ("name def", 0, 5),
+        ("name def", 5, 10),
+        ("name def", 10, 11),
     ]
 
 
@@ -125,12 +125,12 @@ def test_resample(fasta_path: Path) -> None:
     )
 
     assert fasta.segments == [
-        b2m.struct.Segment(name="name abc", start=1, end=8),
-        ("name abc", 9, 16),
-        ("name abc", 17, 24),
-        ("name abc", 25, 27),
-        ("name def", 1, 8),
-        ("name def", 9, 11),
+        b2m.struct.Segment(name="name abc", start=0, end=8),
+        ("name abc", 8, 16),
+        ("name abc", 16, 24),
+        ("name abc", 24, 27),
+        ("name def", 0, 8),
+        ("name def", 8, 11),
     ]
 
 
@@ -146,9 +146,9 @@ def test_slice(fasta_path: Path) -> None:
         ])
     )
     assert seq.segments() == [
-        ("name abc", 1, 5),
-        ("name abc", 6, 10),
-        ("name abc", 11, 14),
+        ("name abc", 0, 5),
+        ("name abc", 5, 10),
+        ("name abc", 10, 14),
     ]
 
     fasta = b2m.load_fasta(fasta_path, T=5)
@@ -165,12 +165,12 @@ def test_slice(fasta_path: Path) -> None:
         ])
     )
     assert seq.segments() == [
-        ("name abc", 1, 5),
-        ("name abc", 6, 10),
-        ("name abc", 11, 15),
-        ("name abc", 16, 20),
-        ("name abc", 21, 25),
-        ("name abc", 26, 27),
+        ("name abc", 0, 5),
+        ("name abc", 5, 10),
+        ("name abc", 10, 15),
+        ("name abc", 15, 20),
+        ("name abc", 20, 25),
+        ("name abc", 25, 27),
     ]
 
     fasta = b2m.load_fasta(fasta_path, T=5)
@@ -186,8 +186,8 @@ def test_slice(fasta_path: Path) -> None:
     )
     print(seq.segments())
     assert seq.segments() == [
-        ("name abc", 8, 12),
-        ("name abc", 13, 17),
-        ("name abc", 18, 22),
-        ("name abc", 23, 27),
+        ("name abc", 7, 12),
+        ("name abc", 12, 17),
+        ("name abc", 17, 22),
+        ("name abc", 22, 27),
     ]

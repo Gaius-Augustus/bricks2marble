@@ -6,7 +6,7 @@ import bricks2marble as b2m
 def test_load(gtf_path: Path) -> None:
     annotation = b2m.load_gtf(gtf_path)
 
-    assert annotation.genes["g1"].transcripts["g1.t1"].entries[
+    assert annotation._genes["g1"]._transcripts["g1.t1"].entries[
         b2m.struct.FeatureType.Transcript
     ] == [
         b2m.struct.GTFEntry(
@@ -21,10 +21,10 @@ def test_load(gtf_path: Path) -> None:
         ),
     ]
 
-    assert set(annotation.genes.keys()) == {"g1"}
-    assert set(annotation.genes["g1"].transcripts.keys()) == {"g1.t1", "g1.t2"}
+    assert set(annotation._genes.keys()) == {"g1"}
+    assert set(annotation._genes["g1"]._transcripts.keys()) == {"g1.t1", "g1.t2"}
 
-    assert annotation.genes["g1"].transcripts["g1.t1"].entries[
+    assert annotation._genes["g1"]._transcripts["g1.t1"].entries[
         b2m.struct.FeatureType.Exon
     ] == [
         b2m.struct.GTFEntry(
@@ -48,7 +48,7 @@ def test_load(gtf_path: Path) -> None:
             attributes="gene_id \"g1\"; transcript_id \"g1.t1\";",
         ),
     ]
-    assert annotation.genes["g1"].transcripts["g1.t1"].entries[
+    assert annotation._genes["g1"]._transcripts["g1.t1"].entries[
         b2m.struct.FeatureType.Intron
     ] == [
         b2m.struct.GTFEntry(
@@ -74,11 +74,11 @@ def test_load(gtf_path: Path) -> None:
     ]
 
     assert (b2m.struct.FeatureType.StartCodon
-            not in annotation.genes["g1"].transcripts["g1.t1"].entries)
+            not in annotation._genes["g1"]._transcripts["g1.t1"].entries)
 
     annotation.finalize()
 
-    assert annotation.genes["g1"].transcripts["g1.t1"].entries[
+    assert annotation._genes["g1"]._transcripts["g1.t1"].entries[
         b2m.struct.FeatureType.StartCodon
     ] == [
         b2m.struct.GTFEntry(
