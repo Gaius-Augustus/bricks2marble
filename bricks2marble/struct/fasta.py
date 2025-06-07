@@ -47,6 +47,8 @@ class Region(Segment):
     forward and backward strand in a genome. It is typically used to
     mark a feature by type in a genome (exon, intron, ...), without
     specifying further information.
+    Counting starts at 0 and ends with T-1, like standard indexing in
+    Python.
     """
 
     strand: Literal["+", "-"] = "+"
@@ -346,14 +348,15 @@ class FASTA:
             for k in occs[0]
         }
 
+    def copy(self) -> "FASTA":
+        return FASTA([seq.copy() for seq in self._sequences])
+
     @overload
     def __getitem__(self, key: int) -> Sequence:
         ...
-
     @overload
     def __getitem__(self, key: int | str) -> Sequence | list[Sequence]:
         ...
-
     def __getitem__(self, key: int | str) -> Sequence | list[Sequence]:
         if isinstance(key, str):
             seqs = []

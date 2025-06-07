@@ -27,6 +27,7 @@ HMM_STATE_AGGREGATION = np.array([
 def _split_regions(
     encoded_labels: np.ndarray,
     offset: int = 0,
+    strand: Literal["+", "-"] = "+",
 ) -> list[Region]:
     """Splits a sequence of HMM states into a sequence of regions
     "intergenic", "intron" or "CDS".
@@ -36,7 +37,7 @@ def _split_regions(
     arr[(arr > 1)] = 2
     change_points = np.where(np.diff(arr) != 0)[0]
     start_points = np.insert(change_points + 1, 0, 0)
-    end_points = np.append(change_points, arr.size - 1)
+    end_points = np.append(change_points + 1, arr.size)
 
     features = ["intergenic", "intron", "CDS"]
     regions = [
@@ -44,6 +45,7 @@ def _split_regions(
             name=features[arr[start]],
             start=start+offset,
             end=end+offset,
+            strand=strand,
         )
         for start, end in zip(start_points, end_points)
     ]
@@ -241,14 +243,15 @@ def GTF_from_model(
     if verbose: start_time = default_timer()
 
     if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Initial prediction...",
+        f"[{default_timer()-start_time:.4f}s] Start initial prediction of "
+        f"{fasta.N} sequences.",
         flush=True,
     )
 
     labels_fwd, labels_bwd = predict_func(fasta)
 
     if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Finding errors in prediction...",
+        f"[{default_timer()-start_time:.4f}s] Searching for errors.",
         flush=True,
     )
 
@@ -270,8 +273,8 @@ def GTF_from_model(
 
             if fwd or bwd:
                 repred_seqs.append(Sequence(
-                    np.concatenate(
-                        (fasta.nuc[i], fasta.nuc[i+1]),
+                    np.expand_dims(
+                        np.concatenate((fasta.nuc[i], fasta.nuc[i+1]), axis=0),
                         axis=0,
                     ),
                     name=fasta.segments[i].name,
@@ -279,18 +282,23 @@ def GTF_from_model(
                     end=fasta.segments[i+1].end,
                 ))
                 repred_index.append(i)
-                repred_strand.append(int(fwd)+int(bwd))
+                if fwd and bwd:
+                    repred_strand.append(2)
+                else:
+                    repred_strand.append(0 if fwd else 1)
 
     if len(repred_seqs) > 0:
         if verbose: print(
-            f"[{default_timer()-start_time:.4f}s] Found {len(repred_seqs)} "
-            "sequence pairs with mismatching intersections. Repredicting...",
+            f"[{default_timer()-start_time:.4f}s] Mismatches: "
+            f"{repred_strand.count(0)} (+) | {repred_strand.count(1)} (-) | "
+            f"{repred_strand.count(2)} (+/-). "
+            f"Repredicting {len(repred_seqs)} sequences.",
             flush=True,
         )
         repred_fwd, repred_bwd = predict_func(FASTA(repred_seqs))
 
     if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Start forming regions...",
+        f"[{default_timer()-start_time:.4f}s] Forming regions.",
         flush=True,
     )
 
@@ -305,18 +313,23 @@ def GTF_from_model(
         coord_diff = 0 if i == 0 else (segment.end - fasta.segments[i-1].start)
 
         if labels_fwd is not None:
-            regions_fwd = _split_regions(labels_fwd[i], segment.start)
+            regions_fwd = _split_regions(
+                labels_fwd[i],
+                segment.start,
+                strand="+",
+            )
             start_f, txs_f, end_f = _transcripts_from_regions(regions_fwd)
             if segment.name not in entries_fwd: entries_fwd[segment.name] = []
 
             is_ir_f = 'intergenic' in [r.name for r in regions_fwd]
-            if (not re_txs_f is not None and is_ir_f and start_f and end_f
-                    and labels_fwd[i-1, -1] == labels_fwd[i, 0]):
+            if (re_txs_f is not None and is_ir_f and start_f and end_f and
+                (labels_fwd[i-1, -1] == labels_fwd[i, 0] or i == 0)
+            ):
                 last_end_f[-1].start = start_f[0].start
                 last_end_f += start_f[1:]
                 entries_fwd[segment.name] += [last_end_f]
 
-            if is_ir_f and txs_f:
+            if is_ir_f and len(txs_f) > 0:
                 if re_txs_f is not None:
                     entries_fwd[segment.name] = _merge_reprediction(
                         entries_fwd[segment.name],
@@ -324,23 +337,30 @@ def GTF_from_model(
                         segment.start + coord_diff//2,
                     )
                 else:
+                    if i == 0 and len(start_f) > 0:
+                        entries_fwd[segment.name] += [start_f]
                     entries_fwd[segment.name] += txs_f
             if is_ir_f:
                 last_end_f = end_f
 
         if labels_bwd is not None:
-            regions_bwd = _split_regions(labels_bwd[i], segment.start)
+            regions_bwd = _split_regions(
+                labels_bwd[i],
+                segment.start,
+                strand="-",
+            )
             start_b, txs_b, end_b = _transcripts_from_regions(regions_bwd)
             if segment.name not in entries_bwd: entries_bwd[segment.name] = []
 
             is_ir_b = 'intergenic' in [r.name for r in regions_bwd]
-            if (not re_txs_b is not None and is_ir_b and start_b and end_b
-                    and labels_bwd[i-1, -1] == labels_bwd[i, 0]):
+            if (re_txs_b is not None and is_ir_b and start_b and end_b and
+                (labels_bwd[i-1, -1] == labels_bwd[i, 0] or i == 0)
+            ):
                 last_end_b[-1].start = start_b[0].start
                 last_end_b += start_b[1:]
                 entries_bwd[segment.name] += [last_end_b]
 
-            if is_ir_b and txs_b:
+            if is_ir_b and len(txs_b) > 0:
                 if re_txs_b is not None:
                     entries_bwd[segment.name] = _merge_reprediction(
                         entries_bwd[segment.name],
@@ -348,6 +368,8 @@ def GTF_from_model(
                         segment.start + coord_diff//2,
                     )
                 else:
+                    if i == 0 and len(start_b) > 0:
+                        entries_bwd[segment.name] += [start_b]
                     entries_bwd[segment.name] += txs_b
             if is_ir_b:
                 last_end_b = end_b
@@ -363,15 +385,19 @@ def GTF_from_model(
                     name=segment.name,
                     start=segment.start,
                     end=segment.end+coord_diff,
-                    strand="+",  # TODO unsure
+                    strand="+",
                 )
-                current_re = repred_fwd[0]
-                repred_fwd = repred_fwd[1:]
+                current_re = repred_fwd[0]  # type: ignore
+                repred_fwd = repred_fwd[1:]  # type: ignore
                 re_ranges = _split_regions(current_re, c_re.start)
                 start_f, re_txs, end_f = _transcripts_from_regions(re_ranges)
 
-                if (not is_ir_f and last_end_f and start_f
-                        and labels_fwd[i-1, -1] == current_re[0]):
+                if (
+                    not is_ir_f
+                    and last_end_f
+                    and start_f
+                    and labels_fwd[i-1, -1] == current_re[0]  # type: ignore
+                ):
                     last_end_f[-1].end = start_f[0].end
                     last_end_f += start_f[1:]
                     entries_fwd[segment.name] += [last_end_f]
@@ -388,15 +414,19 @@ def GTF_from_model(
                     name=segment.name,
                     start=segment.start,
                     end=segment.end+coord_diff,
-                    strand="-",  # TODO unsure
+                    strand="-",
                 )
-                current_re = repred_bwd[0]
-                repred_bwd = repred_bwd[1:]
+                current_re = repred_bwd[0]  # type: ignore
+                repred_bwd = repred_bwd[1:]  # type: ignore
                 re_ranges = _split_regions(current_re, c_re.start)
                 start_b, re_txs, end_b = _transcripts_from_regions(re_ranges)
 
-                if (not is_ir_b and last_end_b and start_b
-                        and labels_bwd[i-1, -1] == current_re[0]):
+                if (
+                    not is_ir_b
+                    and last_end_b
+                    and start_b
+                    and labels_bwd[i-1, -1] == current_re[0]  # type: ignore
+                ):
                     last_end_b[-1].end = start_b[0].end
                     last_end_b += start_b[1:]
                     entries_bwd[segment.name] += [last_end_f]
@@ -409,7 +439,7 @@ def GTF_from_model(
                 last_end_f = end_f
 
     if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Creating GTF entries...",
+        f"[{default_timer()-start_time:.4f}s] Creating GTF entries.",
         flush=True,
     )
 
@@ -420,7 +450,7 @@ def GTF_from_model(
     )
 
     if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Finalize...",
+        f"[{default_timer()-start_time:.4f}s] Finalizing.",
         flush=True,
     )
     annotation.finalize()

@@ -375,21 +375,10 @@ class Transcript:
                 line.frame = phase  # type: ignore
                 phase = (3 - (line.end - line.start - phase) % 3) % 3
 
-    def _check_splits(self) -> None:
-        # method obsolete, will be checked at insert
-        for k in self.entries:
-            new_list = [self.entries[k][0]]
-            for i in range(1, len(self.entries[k])):
-                # TODO what if two exons are in different phases?
-                # -> they will still be merged...
-                if new_list[-1].end == self.entries[k][i].start-1:
-                    new_list[-1].end = self.entries[k][i].end
-                else:
-                    new_list.append(self.entries[k][i])
-            self.entries[k] = new_list
-
     def to_list(self, prefix: str = "") -> list[GTFEntry]:
-        """Creates gtf output for the transcript.
+        """Creates GTF entries from the transcript. Here, coordinates of
+        the inner objects will be transformed to match GTF indexing
+        conventions, i.e. start at 1 and last index is inclusive.
 
         Returns:
             list[GTFEntry]: List of :class:`GTFEntry` objects.
@@ -423,11 +412,10 @@ class Transcript:
                             or (i == 0 and self.strand == '-')
                     ):
                         cds_type = 'terminal'
-                    # TODO why is cds_type formatted differently?
                     entry.attributes = (
                         f"gene_id \"{self.gene_id}\"; "
                         f"transcript_id \"{prefix + self.id}\"; "
-                        f"cds_type={cds_type};"
+                        f"cds_type \"{cds_type}\";"
                     )
 
                 elif k not in [FeatureType.Transcript, FeatureType.Gene]:
@@ -438,24 +426,19 @@ class Transcript:
 
                 entry_copy = entry.model_copy()
                 entry_copy.start += 1
-                entry_copy.end += 1
                 gtf.append(entry_copy)
 
         if FeatureType.Exon not in self.entries:
-            # TODO is exon and CDS interchangable? or is only one of
-            # them needed for output?
             for entry in self.entries[FeatureType.CDS]:
                 exon = GTFEntry(
                     **(entry.model_dump() | {"feature": FeatureType.Exon})
                 )
                 exon.start += 1
-                exon.end += 1
                 gtf.append(exon)
 
         gtf.sort(key=lambda x: (x.start, x.end))
         if tx_line is not None:
             tx_line = tx_line.model_copy()
             tx_line.start += 1
-            tx_line.end += 1
             gtf = [tx_line] + gtf
         return gtf
