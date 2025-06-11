@@ -355,17 +355,11 @@ class FASTA:
     def __getitem__(self, key: int) -> Sequence:
         ...
     @overload
-    def __getitem__(self, key: int | str) -> Sequence | list[Sequence]:
+    def __getitem__(self, key: slice) -> "FASTA":
         ...
-    def __getitem__(self, key: int | str) -> Sequence | list[Sequence]:
-        if isinstance(key, str):
-            seqs = []
-            for seq in self._sequences:
-                if seq.name == key:
-                    seqs.append(seq)
-            if len(seqs) == 0:
-                raise KeyError(f"No sequence named {key!r}")
-            return seqs[0] if len(seqs) == 1 else seqs
+    def __getitem__(self, key: int | slice) -> "Sequence | FASTA":
+        if isinstance(key, slice):
+            return FASTA(self._sequences[key])
         return self._sequences[key]
 
     def __str__(self) -> str:
