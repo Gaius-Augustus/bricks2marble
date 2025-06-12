@@ -1,4 +1,6 @@
+import random
 import re
+import string
 import subprocess
 from pathlib import Path
 
@@ -59,7 +61,10 @@ def compare_gtf(
     if isinstance(gffcompare, Path): gffcompare = str(gffcompare)
     if gffcompare is None: gffcompare = "gffcompare"
 
-    cache_dir = Path.cwd() / "_cache/"
+    random_id = "".join(
+        random.choices(string.ascii_uppercase + string.digits, k=10)
+    )
+    cache_dir = Path.cwd() / f"_cache_{random_id}/"
     cache_dir.mkdir(exist_ok=True)
 
     generated: list[str] = []
