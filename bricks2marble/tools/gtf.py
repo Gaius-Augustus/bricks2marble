@@ -4,7 +4,7 @@ import string
 import subprocess
 from pathlib import Path
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from ..struct import Annotation
 
@@ -112,4 +112,14 @@ def compare_gtf(
     if not any(cache_dir.iterdir()):
         cache_dir.rmdir()
 
-    return AnnotationComparison(**results)
+    try:
+        return AnnotationComparison(**results)
+    except ValidationError:
+        return AnnotationComparison(
+            base=CompareMetrics(sensitivity=0, precision=0),
+            exon=CompareMetrics(sensitivity=0, precision=0),
+            intron=CompareMetrics(sensitivity=0, precision=0),
+            intron_chain=CompareMetrics(sensitivity=0, precision=0),
+            transcript=CompareMetrics(sensitivity=0, precision=0),
+            locus=CompareMetrics(sensitivity=0, precision=0),
+        )

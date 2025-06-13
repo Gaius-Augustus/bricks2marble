@@ -1,1 +1,1 @@
-from .gtf import AnnotationComparison, compare_gtf
+from .gtf import compare_gtf
