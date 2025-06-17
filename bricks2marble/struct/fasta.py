@@ -162,14 +162,25 @@ class Sequence:
         nuc[nuc == -1] = pad_index
         return ENCODING[nuc]
 
-    def resample(self, T: int) -> "Sequence":
+    def resample(self, T: int, drop_remainder: bool = False) -> "Sequence":
         """Resamples this sequence into chunks of the given length. This
         can lead to differently padded sequences.
 
         It does not create a new sequence but overrides this one.
+
+        Args:
+            T (int): Length of the new chunks.
+            drop_remainder (bool, optional): If set to True, deletes the
+                last chunk if the sequence has a length not divisable by
+                ``T``. Defaults to False.
         """
         if T <= 0:
             raise ValueError(f"Unallowed chunk size: {T}")
+        if drop_remainder:
+            N = self.size // T
+            self._end -= (self.size - N*T)
+            self._sequence = self.flat[:N*T].reshape(N, T)
+            return self
         missing = (-self.size) % T
         N = (self.size + missing) // T
         flattened = np.concatenate((
@@ -296,15 +307,21 @@ class FASTA:
     def T(self) -> int:
         return self.nuc.shape[1]
 
-    def resample(self, T: int) -> "FASTA":
+    def resample(self, T: int, drop_remainder: bool = False) -> "FASTA":
         """Resamples the :class:`FASTA` object such that each sequence
         is grouped into chunks of the given length. This can lead to
         differently padded sequences.
         This method does not create a new FASTA object but is an
         in-place operation.
+
+        Args:
+            T (int): The target chunk size.
+            drop_remainder (bool, optional): If set to True, deletes the
+                last chunk in each sequence, if the sequence has a
+                length not divisable by ``T``. Defaults to False.
         """
         for seq in self._sequences:
-            seq.resample(T)
+            seq.resample(T, drop_remainder=drop_remainder)
         return self
 
     def one_hot(

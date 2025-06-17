@@ -8,6 +8,7 @@ from ..struct.fasta import FASTA, Sequence
 def load_fasta(
     path: Path | str,
     T: int | None = None,
+    drop_remainder: bool = False,
     restrict: int = -1,
 ) -> FASTA:
     """Loads a :class:`FASTA` object that makes handling a nucleotide
@@ -20,11 +21,14 @@ def load_fasta(
             have a length not divisible by ``T`` are padded with ``-1``.
             Defaults to the total length of the genome, meaning that the
             FASTA file only contains one long sequence.
+        drop_remainder (bool, optional): If set to True, deletes the
+            last chunk in each sequence, if the sequence has a length
+            not divisable by ``T``. Defaults to False.
         restrict (int, optional): Restrict the reading window. Only
             reads the given number of nucleotides from the file.
             Defaults to -1, which means everything is read.
     """
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         lines = f.readlines(restrict)
 
     raw_sequences: list[bytes] = []
@@ -41,8 +45,8 @@ def load_fasta(
     raw_sequences.append(current_sequence.encode())
 
     translation_table = bytes.maketrans(
-        b"ACGTNacgt",
-        bytes([0, 1, 2, 3, 4, 5, 6, 7, 8]),
+        b"ACGTNnacgt",
+        bytes([0, 1, 2, 3, 4, 4, 5, 6, 7, 8]),
     )
     sequences = []
     for seq, name in zip(raw_sequences, name_sequences):
@@ -53,5 +57,5 @@ def load_fasta(
         ))
     fasta = FASTA(sequences)
     if T is not None:
-        fasta.resample(T)
+        fasta.resample(T, drop_remainder=drop_remainder)
     return fasta
