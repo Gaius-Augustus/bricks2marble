@@ -6,6 +6,7 @@ from learnMSA.msa_hmm.Viterbi import viterbi
 from ..config import ModelConfig, with_config
 from .emitter import Emitter
 from .transitioner import Transitioner
+from .util import UncertainPredictionRegularizer
 
 
 class HMMLayerConfig(ModelConfig):
@@ -27,6 +28,7 @@ class HMMLayerConfig(ModelConfig):
     train_transitions: bool = True
     train_start_dist: bool = True
     share_noncoding_params: bool = False
+    nudge_IR: float = 0.0
 
 
 @with_config(HMMLayerConfig)
@@ -60,6 +62,11 @@ class HMMLayer(HmmLayer):
             starting_distribution_trainable=self.config.train_start_dist,
             transitions_trainable=self.config.train_transitions,
         )
+        if self.config.nudge_IR > 0:
+            self.regularizer = UncertainPredictionRegularizer(
+                weight=self.config.nudge_IR,
+                class_index=0,
+            )
 
         self.cell = HmmCell(
             [emitter.config.n_states] * (self.config.heads),
@@ -121,6 +128,8 @@ class HMMLayer(HmmLayer):
             ), 0))
             # B, T, 2*H, D
 
+        if self.config.nudge_IR > 0:
+            self.regularizer(tf.nn.softmax(x, axis=-1))
         return x
 
     def viterbi(
