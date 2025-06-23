@@ -210,7 +210,7 @@ def _annotation_from_dict(
                     transcript_id=t_id,
                 )
                 if r.name == "CDS":
-                    phase = (3 - (r.end - r.start + 1 - phase) % 3) % 3            
+                    phase = (3 - (r.end - r.start - phase) % 3) % 3
             len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
             len_bwd = 0 if seq not in entries_bwd else len(entries_bwd[seq])
     return annotation
