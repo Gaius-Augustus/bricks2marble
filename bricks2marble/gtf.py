@@ -322,7 +322,7 @@ def GTF_from_model(
             if segment.name not in entries_fwd: entries_fwd[segment.name] = []
 
             is_ir_f = 'intergenic' in [r.name for r in regions_fwd]
-            if (re_txs_f is None and is_ir_f and start_f and end_f and
+            if (re_txs_f is None and is_ir_f and start_f and last_end_f and
                 (i == 0 or labels_fwd[i-1, -1] == labels_fwd[i, 0])
             ):
                 last_end_f[-1].start = start_f[0].start
@@ -353,7 +353,7 @@ def GTF_from_model(
             if segment.name not in entries_bwd: entries_bwd[segment.name] = []
 
             is_ir_b = 'intergenic' in [r.name for r in regions_bwd]
-            if (re_txs_b is None and is_ir_b and start_b and end_b and
+            if (re_txs_b is None and is_ir_b and start_b and last_end_b and
                 (i == 0 or labels_bwd[i-1, -1] == labels_bwd[i, 0])
             ):
                 last_end_b[-1].start = start_b[0].start
