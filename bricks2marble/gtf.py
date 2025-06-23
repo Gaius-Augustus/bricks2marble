@@ -262,12 +262,12 @@ def GTF_from_model(
         if (fasta.segments[i].name == fasta.segments[i+1].name):
             fwd = bwd = False
 
-            if labels_fwd is not None and (
-                labels_fwd[i, -1] != labels_fwd[i+1, 0]
+            if labels_fwd is not None and not (
+                labels_fwd[i, -1] == labels_fwd[i+1, 0] == 0
             ):
                 fwd = True
-            if labels_bwd is not None and (
-                labels_bwd[i, -1] != labels_bwd[i+1, 0]
+            if labels_bwd is not None and not(
+                labels_bwd[i, -1] == labels_bwd[i+1, 0] == 0
             ):
                 bwd = True
 
@@ -322,8 +322,8 @@ def GTF_from_model(
             if segment.name not in entries_fwd: entries_fwd[segment.name] = []
 
             is_ir_f = 'intergenic' in [r.name for r in regions_fwd]
-            if (re_txs_f is not None and is_ir_f and start_f and end_f and
-                (labels_fwd[i-1, -1] == labels_fwd[i, 0] or i == 0)
+            if (re_txs_f is None and is_ir_f and start_f and end_f and
+                (i == 0 or labels_fwd[i-1, -1] == labels_fwd[i, 0])
             ):
                 last_end_f[-1].start = start_f[0].start
                 last_end_f += start_f[1:]
@@ -353,8 +353,8 @@ def GTF_from_model(
             if segment.name not in entries_bwd: entries_bwd[segment.name] = []
 
             is_ir_b = 'intergenic' in [r.name for r in regions_bwd]
-            if (re_txs_b is not None and is_ir_b and start_b and end_b and
-                (labels_bwd[i-1, -1] == labels_bwd[i, 0] or i == 0)
+            if (re_txs_b is None and is_ir_b and start_b and end_b and
+                (i == 0 or labels_bwd[i-1, -1] == labels_bwd[i, 0])
             ):
                 last_end_b[-1].start = start_b[0].start
                 last_end_b += start_b[1:]
@@ -376,7 +376,7 @@ def GTF_from_model(
 
         re_txs_f = None
         re_txs_b = None
-        if repred_index and i == repred_index[0]:
+        if len(repred_index) > 0 and i == repred_index[0]:
             repred_index.pop(0)
             strand = repred_strand.pop(0)
 
@@ -429,14 +429,14 @@ def GTF_from_model(
                 ):
                     last_end_b[-1].end = start_b[0].end
                     last_end_b += start_b[1:]
-                    entries_bwd[segment.name] += [last_end_f]
+                    entries_bwd[segment.name] += [last_end_b]
                 if re_txs:
                     entries_bwd[segment.name] = _merge_reprediction(
                         entries_bwd[segment.name],
                         re_txs,
                         c_re.end + coord_diff//2,
                     )
-                last_end_f = end_f
+                last_end_b = end_b
 
     if verbose: print(
         f"[{default_timer()-start_time:.4f}s] Creating GTF entries.",
