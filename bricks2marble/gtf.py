@@ -171,13 +171,15 @@ def _annotation_from_dict(
     tx_id = 0
     for seq in entries_fwd:
         phase = -1
-        while len(entries_fwd[seq]) + len(entries_bwd[seq]) > 0:
+        len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
+        len_bwd = 0 if seq not in entries_bwd else len(entries_bwd[seq])
+        while len_fwd + len_bwd > 0:
             fwd = False
-            if len(entries_fwd[seq]) > 0 and len(entries_bwd[seq]) > 0 and (
+            if len_fwd and len_bwd > 0 and (
                 entries_fwd[seq][0][0].start >= entries_bwd[seq][0][0].start
             ):
                 fwd = True
-            elif len(entries_fwd[seq]) > 0:
+            elif len_fwd > 0:
                 fwd = True
 
             if fwd:
@@ -208,7 +210,9 @@ def _annotation_from_dict(
                     transcript_id=t_id,
                 )
                 if r.name == "CDS":
-                    phase = (3 - (r.end - r.start + 1 - phase) % 3) % 3
+                    phase = (3 - (r.end - r.start + 1 - phase) % 3) % 3            
+            len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
+            len_bwd = 0 if seq not in entries_bwd else len(entries_bwd[seq])
     return annotation
 
 
