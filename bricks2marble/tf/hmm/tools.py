@@ -1,5 +1,6 @@
 from typing import Sequence
 
+import numpy as np
 import tensorflow as tf
 
 
@@ -56,6 +57,7 @@ def make_codon_probs(
     return codon_probs[tf.newaxis, tf.newaxis, :]
 
 
+@tf.function
 def make_kmer(
     x: tf.Tensor,
     k: int,
@@ -175,31 +177,100 @@ def get_nuc_emission_distribution(
     )  # type: ignore
 
 
-def is_intergenic_loop(edge: Sequence[int]) -> bool:
-    return edge[1]==edge[2] and edge[1] == 0
+def state_transitions(
+    isc: int = 1,
+    T_exon: int = 100,
+    T_intron: int = 10000,
+    T_ir: int = 10000,
+    heads: int = 1,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    indices = np.array([
+        [ 0,  0],
+        [ 0,  7],
+        [ 7,  5],
+        [ 5, 14],
+        [14,  0],
+
+        [ 4,  5],
+        [ 5,  6],
+        [ 6,  4],
+
+        [ 4,  8],
+        [11,  4],
+
+        [ 5,  9],
+        [12,  5],
+
+        [ 6, 10],
+        [13,  6],
+    ])
+    # intron loops
+    introns = np.array(
+        [[i+1, i+1] for i in range(3*isc)]
+        + [[i+1+j*isc, i+2+j*isc] for i in range(isc-1) for j in range(3)]
+        + [
+            [         isc, 11+3*(isc-1)],
+            [       2*isc, 12+3*(isc-1)],
+            [       3*isc, 13+3*(isc-1)],
+            [ 8+3*(isc-1),            1],
+            [ 9+3*(isc-1),        isc+1],
+            [10+3*(isc-1),      2*isc+1],
+        ]
+    )
+    if isc > 1:
+        indices[indices > 0] = indices[indices > 0] + 3*(isc-1)
+    indices = np.r_[indices, introns]
+
+    values = np.array([
+        np.log(T_ir - 1), 0,
+        0, np.log(1/2), 0,
+        np.log(T_exon - 1), np.log(T_exon - 1), np.log(T_exon - 1),
+        0, 0,
+        np.log(1/2), 0,
+        0, 0,
+        np.log(T_intron / isc - 1),
+    ] + [
+        0, 0, 0, 0,
+    ], dtype=np.float32)
+
+    share = np.array(
+        [[14, 14+3*isc]]
+        + ([[14+3*isc, 14+6*isc]] if isc > 1 else [[18, 21]])
+    )
+
+    n_indices = indices.shape[0]
+    repeats = np.arange(heads).reshape(heads, 1, 1)
+    repeats = np.tile(repeats, (1, n_indices, 1))
+    indices = np.tile(indices, (heads, 1, 1))
+    indices = np.concatenate([repeats, indices], axis=-1, dtype=np.int64)
+    indices = indices.reshape(-1, 3)
+    values = np.tile(values, heads)
+    share = np.concatenate(
+        [share + i*n_indices for i in range(heads)],
+        axis=0,
+    )
+    return indices, values, share
 
 
-def is_intron_loop(edge: Sequence[int], k: int = 1) -> bool:
-    return edge[1]==edge[2] and edge[1] > 0 and edge[1] < 1+3*k
+def state_start_dist(
+    isc: int = 1,
+    heads: int = 1,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    indices = np.array([
+        [0, h, j] for h in range(heads) for j in range(12+3*isc)
+    ])
+    values = np.array([
+        np.log(100),
+        np.log(4),
+        np.log(10), np.log(20), np.log(10),
+        0,
+    ]*heads, dtype=np.float32)
 
-
-def is_exon_transition(edge: Sequence[int], k: int = 1) -> bool:
-    found_any = False
-    exon_offset = 1+3*k
-    for _ in range(k):
-        found = (
-            edge[2]-exon_offset == (edge[1]-exon_offset+k)%(3*k)
-                and edge[1] >= exon_offset
-                and edge[1] < exon_offset+3*k
-        )
-        found_any = found_any or found
-    return found_any
-
-
-def is_exon_1_out_transition(edge: Sequence[int], k: int = 1) -> bool:
-    return edge[1] >= 1+4*k and edge[1] < 1+5*k and edge[1] != edge[2]
-
-
-def is_intergenic_out_transition(edge: Sequence[int], k: int = 1) -> bool:
-    return edge[1] == 0 and edge[2] != 0
-
+    share = np.array([
+        [1, 1+3*isc], [4+3*isc,12+3*isc]
+    ])
+    share = np.concatenate(
+        [share + i*(12+3*isc) for i in range(heads)],
+        axis=0,
+    )
+    return indices, values, share

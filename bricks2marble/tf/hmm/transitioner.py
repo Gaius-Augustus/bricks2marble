@@ -4,9 +4,8 @@ import numpy as np
 import tensorflow as tf
 
 from ..config import ModelConfig, with_config
-from .tools import (is_exon_1_out_transition, is_exon_transition,
-                    is_intergenic_loop, is_intergenic_out_transition,
-                    is_intron_loop)
+from ..util import shared_sparse_tensor
+from .tools import state_start_dist, state_transitions
 
 STATES = ["IR", "I0", "I1", "I2", "E0", "E1", "E2",
           "START", "EI0", "EI1", "EI2", "IE0", "IE1", "IE2", "STOP"]
@@ -15,12 +14,17 @@ STATES = ["IR", "I0", "I1", "I2", "E0", "E1", "E2",
 class TransitionerConfig(ModelConfig):
 
     heads: int = 1
+    intron_state_chain: int = 1
     initial_exon_len: int = 100
     initial_intron_len: int = 10000
     initial_ir_len: int = 10000
     starting_distribution_trainable: bool = True
     transitions_trainable: bool = True
     init_component_sd: float = 0.05
+
+    @property
+    def n_states(self) -> int:
+        return 12 + 3*self.intron_state_chain
 
 
 @with_config(TransitionerConfig)
@@ -33,10 +37,19 @@ class Transitioner(tf.keras.layers.Layer):
 
     def post_config_init(self) -> None:
         super().__init__()
-        self.num_states = 15
-        self.indices = self.make_transition_indices()
-        self.num_transitions = len(self.indices) // self.config.heads
-        self.init = "zeros"
+        self._indices, self._values, self._shared_values = state_transitions(
+            isc=self.config.intron_state_chain,
+            T_exon=self.config.initial_exon_len,
+            T_intron=self.config.initial_intron_len,
+            T_ir=self.config.initial_ir_len,
+            heads=self.config.heads,
+        )
+        self._indices_st, self._values_st, self._shared_values_st = (
+            state_start_dist(
+                isc=self.config.intron_state_chain,
+                heads=self.config.heads,
+            )
+        )
         self.reverse = False
 
     def cell_init(self, cell) -> None:
@@ -45,95 +58,49 @@ class Transitioner(tf.keras.layers.Layer):
     def build(self, input_shape: tuple[int | None, ...]) -> None:
         if self.built:
             return
+
         self.transition_kernel = self.add_weight(
-            shape=[self.config.heads, self.num_transitions],
+            shape=[self.config.heads, len(self._values) // self.config.heads],
             initializer=tf.keras.initializers.Constant(
-                self.make_transition_init(),  # type: ignore
+                self._values.reshape(self.config.heads, -1),  # type: ignore
             ),
             trainable=self.config.transitions_trainable,
             name="transition_kernel",
         )
         self.starting_distribution_kernel = self.add_weight(
-            shape=[1, self.config.heads, self.num_states],
-            initializer="zeros" if self.config.starting_distribution_trainable
-                else tf.keras.initializers.Constant(
-                    tf.expand_dims([[
-                            3., -1., -1., -1., 1., 1.5, 1.,
-                            -2., -2., -2., -2., -2., -2., -2., -2.
-                        ]] * self.config.heads,
-                        axis=0,
-                    )
-                ),
+            shape=[
+                1,
+                self.config.heads,
+                len(self._values_st) // self.config.heads,
+            ],
+            initializer=tf.keras.initializers.Constant(np.reshape(
+                self._values_st,
+                (1, self.config.heads, -1),
+            )),  # type: ignore
             name="starting_distribution_kernel",
             trainable=self.config.starting_distribution_trainable,
         )
         self.built = True
 
-    def make_transition_init(self, k: int = 1, sd: float = 0.05) -> np.ndarray:
-        init = []
-        for edge in self.indices:
-            if is_intergenic_loop(edge):
-                p_loop = 1 - 1 / self.config.initial_ir_len
-                init.append(-np.log(1/p_loop - 1))
-            elif is_intron_loop(edge, k):
-                p_loop = 1 - 1 / self.config.initial_intron_len
-                init.append(-np.log(1/p_loop - 1))
-            elif is_exon_transition(edge, k):
-                p_next_exon = 1 - 1 / self.config.initial_exon_len
-                init.append(-np.log(1/p_next_exon - 1))
-            elif is_exon_1_out_transition(edge, k):
-                init.append(np.log(1/2))
-            elif is_intergenic_out_transition(edge, k):
-                init.append(np.log(1/k) + np.random.normal(0, sd))
-            else:
-                init.append(0)
-        return np.array(init).reshape(self.config.heads, self.num_transitions)
-
-    def make_transition_indices(self) -> np.ndarray:
-        IR = 0
-        I = list(range(1, 4))
-        E = list(range(4, 7))
-        START = 7
-        EI = list(range(8, 11))
-        IE = list(range(11, 14))
-        STOP = 14
-        indices = [
-            (IR, IR), (IR, START), (STOP, IR), (START, E[1]), (E[1], STOP),
-        ]
-        for cds in range(3):
-            indices.append((E[cds], E[(cds+1) % 3]))
-            indices.append((E[cds], EI[cds]))
-            indices.append((EI[cds], I[cds]))
-            indices.append((I[cds], I[cds]))
-            indices.append((I[cds], IE[cds]))
-            indices.append((IE[cds], E[cds]))
-
-        repeats = np.arange(self.config.heads).reshape(self.config.heads, 1, 1)
-        repeats = np.tile(repeats, (1, len(indices), 1))
-        indices = np.tile(indices, (self.config.heads, 1, 1))
-        indices = np.concatenate([repeats, indices], axis=-1, dtype=np.int64)
-        return indices.reshape(-1, 3)
-
     def recurrent_init(self) -> None:
         self.A = self.make_A()
         self.A_transposed = tf.transpose(self.A, (0, 2, 1))
 
-    def make_A_sparse(self, values=None) -> tf.SparseTensor:
-        if values is None:
-            values = tf.reshape(self.transition_kernel, [-1])
-        tensor = tf.SparseTensor(
-            indices=self.indices,
-            values=values,
-            dense_shape=(self.config.heads, self.num_states, self.num_states),
+    def make_A_sparse(self) -> tf.SparseTensor:
+        tensor = shared_sparse_tensor(
+            indices=self._indices,
+            values=tf.reshape(self.transition_kernel, [-1]),
+            shape=tf.constant([
+                self.config.heads,
+                self.config.n_states,
+                self.config.n_states,
+            ], dtype=tf.int64),
+            share=self._shared_values,
         )
-        tensor = tf.sparse.reorder(tensor)
-        tensor = tf.sparse.softmax(tensor)
-        return tensor
+        return tf.sparse.softmax(tensor)
 
     def make_A(self) -> tf.Tensor:
-        A_sparse = self.make_A_sparse()
-        A = tf.sparse.to_dense(self.make_A_sparse())
-        return A
+        return tf.sparse.to_dense(self.make_A_sparse())
 
     def make_log_A(self) -> tf.Tensor:
         A_sparse = self.make_A_sparse()
@@ -142,7 +109,17 @@ class Transitioner(tf.keras.layers.Layer):
         return log_A
 
     def make_initial_distribution(self) -> tf.Tensor:
-        return tf.nn.softmax(self.starting_distribution_kernel)  # type: ignore
+        tensor = shared_sparse_tensor(
+            indices=self._indices_st,
+            values=tf.reshape(self.starting_distribution_kernel, [-1]),
+            shape=tf.constant([
+                1,
+                self.config.heads,
+                self.config.n_states,
+            ], dtype=tf.int64),
+            share=self._shared_values_st,
+        )
+        return tf.sparse.to_dense(tf.sparse.softmax(tensor))
 
     def call(self, inputs: tf.Tensor) -> tf.Tensor:
         if self.reverse:

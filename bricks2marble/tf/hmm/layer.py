@@ -4,9 +4,9 @@ from learnMSA.msa_hmm.MsaHmmLayer import MsaHmmLayer as HmmLayer
 from learnMSA.msa_hmm.Viterbi import viterbi
 
 from ..config import ModelConfig, with_config
+from ..util import UncertainPredictionRegularizer
 from .emitter import Emitter
 from .transitioner import Transitioner
-from .util import UncertainPredictionRegularizer
 
 
 class HMMLayerConfig(ModelConfig):
@@ -25,10 +25,15 @@ class HMMLayerConfig(ModelConfig):
     initial_exon_len: int = 100
     initial_intron_len: int = 10000
     initial_ir_len: int = 10000
+    intron_state_chain: int = 1
     train_transitions: bool = True
     train_start_dist: bool = True
     share_noncoding_params: bool = False
     nudge_IR: float = 0.0
+
+    @property
+    def n_states(self) -> int:
+        return 12 + 3*self.intron_state_chain
 
 
 @with_config(HMMLayerConfig)
@@ -53,6 +58,7 @@ class HMMLayer(HmmLayer):
             heads=self.config.heads,
             use_reverse_strand=self.config.use_reverse_strand,
             share_noncoding_params=self.config.share_noncoding_params,
+            intron_state_chain=self.config.intron_state_chain,
         )
         transitioner = Transitioner(
             heads=self.config.heads,
@@ -61,6 +67,7 @@ class HMMLayer(HmmLayer):
             initial_ir_len=self.config.initial_ir_len,
             starting_distribution_trainable=self.config.train_start_dist,
             transitions_trainable=self.config.train_transitions,
+            intron_state_chain=self.config.intron_state_chain,
         )
         if self.config.nudge_IR > 0:
             self.regularizer = UncertainPredictionRegularizer(
@@ -180,3 +187,12 @@ class HMMLayer(HmmLayer):
             # B, T, 2*H
 
         return x
+
+    def compute_output_shape(
+        self,
+        input_shape: tuple[int | None, ...],
+    ) -> tuple[int | None, ...]:
+        return input_shape[:-1] + (
+            (2 if self.config.use_reverse_strand else 1) * self.config.heads,
+            self.config.n_states,
+        )
