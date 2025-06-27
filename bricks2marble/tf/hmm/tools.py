@@ -185,58 +185,50 @@ def state_transitions(
     heads: int = 1,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     indices = np.array([
-        [ 0,  0],
-        [ 0,  7],
-        [ 7,  5],
-        [ 5, 14],
-        [14,  0],
+        [ 0,  0, np.log(T_ir - 1)],
+        [ 0,  7, 0],
+        [ 7,  5, 0],
+        [ 5, 14, np.log(1/2)],
+        [14,  0, 0],
 
-        [ 4,  5],
-        [ 5,  6],
-        [ 6,  4],
+        [ 4,  5, np.log(T_exon - 1)],
+        [ 5,  6, np.log(T_exon - 1)],
+        [ 6,  4, np.log(T_exon - 1)],
 
-        [ 4,  8],
-        [11,  4],
+        [ 4,  8, 0],
+        [11,  4, 0],
 
-        [ 5,  9],
-        [12,  5],
+        [ 5,  9, np.log(1/2)],
+        [12,  5, 0],
 
-        [ 6, 10],
-        [13,  6],
+        [ 6, 10, 0],
+        [13,  6, 0],
     ])
     # intron loops
     introns = np.array(
-        [[i+1, i+1] for i in range(3*isc)]
-        + [[i+1+j*isc, i+2+j*isc] for i in range(isc-1) for j in range(3)]
+        [
+            [i+1, i+1, np.log(T_intron / isc - 1) + np.random.normal(0, 1e-2)]
+            for i in range(3*isc)
+        ]
         + [
-            [         isc, 11+3*(isc-1)],
-            [       2*isc, 12+3*(isc-1)],
-            [       3*isc, 13+3*(isc-1)],
-            [ 8+3*(isc-1),            1],
-            [ 9+3*(isc-1),        isc+1],
-            [10+3*(isc-1),      2*isc+1],
+            [i+1+j*isc, i+2+j*isc, 0]
+            for i in range(isc-1) for j in range(3)
+        ]
+        + [
+            [         isc, 11+3*(isc-1), 0],
+            [       2*isc, 12+3*(isc-1), 0],
+            [       3*isc, 13+3*(isc-1), 0],
+            [ 8+3*(isc-1),            1, 0],
+            [ 9+3*(isc-1),        isc+1, 0],
+            [10+3*(isc-1),      2*isc+1, 0],
         ]
     )
+    values = np.r_[indices[:, 2], introns[:, 2]].astype(np.float32)
+    indices = indices[:, :2].astype(np.int64)
+    introns = introns[:, :2].astype(np.int64)
     if isc > 1:
         indices[indices > 0] = indices[indices > 0] + 3*(isc-1)
     indices = np.r_[indices, introns]
-
-    values = np.array([
-        np.log(T_ir - 1), 0,
-        0, np.log(1/2), 0,
-        np.log(T_exon - 1), np.log(T_exon - 1), np.log(T_exon - 1),
-        0, 0,
-        np.log(1/2), 0,
-        0, 0,
-        np.log(T_intron / isc - 1),
-    ] + [
-        0, 0, 0, 0,
-    ], dtype=np.float32)
-
-    share = np.array(
-        [[14, 14+3*isc]]
-        + ([[14+3*isc, 14+6*isc]] if isc > 1 else [[18, 21]])
-    )
 
     n_indices = indices.shape[0]
     repeats = np.arange(heads).reshape(heads, 1, 1)
@@ -245,11 +237,16 @@ def state_transitions(
     indices = np.concatenate([repeats, indices], axis=-1, dtype=np.int64)
     indices = indices.reshape(-1, 3)
     values = np.tile(values, heads)
-    share = np.concatenate(
-        [share + i*n_indices for i in range(heads)],
-        axis=0,
-    )
-    return indices, values, share
+
+    # share = np.array(
+    #     [[14, 14+3*isc]]
+    #     + ([[14+3*isc, 14+6*isc]] if isc > 1 else [[18, 21]])
+    # )
+    # share = np.concatenate(
+    #     [share + i*n_indices for i in range(heads)],
+    #     axis=0,
+    # )
+    return indices, values, None
 
 
 def state_start_dist(
