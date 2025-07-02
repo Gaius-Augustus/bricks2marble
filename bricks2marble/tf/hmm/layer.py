@@ -1,4 +1,5 @@
 import tensorflow as tf
+from learnMSA.msa_hmm.MaximumExpectedAccuracy import maximum_expected_accuracy
 from learnMSA.msa_hmm.MsaHmmCell import HmmCell
 from learnMSA.msa_hmm.MsaHmmLayer import MsaHmmLayer as HmmLayer
 from learnMSA.msa_hmm.Viterbi import viterbi
@@ -85,13 +86,7 @@ class HMMLayer(HmmLayer):
         )
         super().build(input_shape)
 
-    def call(
-        self,
-        x: tf.Tensor,
-        nuc: tf.Tensor,
-        training: bool = False,
-        use_loglik: bool = True,
-    ) -> tf.Tensor:
+    def prepare_input(self, x: tf.Tensor, nuc: tf.Tensor) -> tf.Tensor:
         if self.config.use_reverse_strand:
             B, T, D = tf.unstack(tf.shape(nuc))  # type: ignore
             nuc = tf.expand_dims(nuc, 0)
@@ -106,6 +101,16 @@ class HMMLayer(HmmLayer):
             nuc = tf.expand_dims(nuc, 0)
             x = tf.expand_dims(x, 0)
         x = tf.concat((x, nuc), axis=-1)  # type: ignore
+        return x
+
+    def call(
+        self,
+        x: tf.Tensor,
+        nuc: tf.Tensor,
+        training: bool = False,
+        use_loglik: bool = True,
+    ) -> tf.Tensor:
+        x = self.prepare_input(x, nuc)
 
         x, _, _ = self.state_posterior_log_probs(
             x,
@@ -145,20 +150,7 @@ class HMMLayer(HmmLayer):
         nuc: tf.Tensor,
     ) -> tf.Tensor:
         self.cell.recurrent_init()
-        if self.config.use_reverse_strand:
-            B, T, D = tf.unstack(tf.shape(nuc))  # type: ignore
-            nuc = tf.expand_dims(nuc, 0)
-            nuc_reverse = tf.gather(nuc, [3, 2, 1, 0, 4], axis=-1)
-            nuc_reverse = tf.reverse(nuc_reverse, [-2])
-            nuc = tf.concat((nuc, nuc_reverse), axis=0)  # type: ignore
-            nuc = tf.reshape(nuc, (1, 2*B, T, D))
-            x = tf.expand_dims(x, 0)
-            x = tf.concat((x, tf.reverse(x, [-2])), axis=0)  # type: ignore
-            x = tf.reshape(x, (1, 2*B, T, -1))
-        else:
-            nuc = tf.expand_dims(nuc, 0)
-            x = tf.expand_dims(x, 0)
-        x = tf.concat((x, nuc), axis=-1)  # type: ignore
+        x = self.prepare_input(x, nuc)
 
         x = viterbi(
             x,
@@ -186,6 +178,48 @@ class HMMLayer(HmmLayer):
             ), 0))
             # B, T, 2*H
 
+        return x
+
+    def mea(
+        self,
+        x: tf.Tensor,
+        nuc: tf.Tensor,
+        training: bool = False,
+        use_loglik: bool = True,
+    ) -> tf.Tensor:
+        x = self.prepare_input(x, nuc)
+        log_post = self.state_posterior_log_probs(
+            x,
+            training=training,
+            no_loglik=not use_loglik,
+        )
+        post = tf.nn.softmax(log_post, axis=-1)
+        # H, 2*B, T, D
+        x = maximum_expected_accuracy(
+            post,
+            self.cell,
+            parallel_factor=self.parallel_factor,
+        )
+        # H, 2*B, T
+        x = tf.transpose(x, [1, 2, 0])
+        # 2*B, T, H
+        if self.config.use_reverse_strand:
+            x = tf.reshape(x, tf.concat((
+                (2, ),
+                (tf.shape(x)[0]//2, ),  # type: ignore
+                tf.shape(x)[1:]  # type: ignore
+            ), 0))
+            # 2, B, T, H
+            x = tf.concat(
+                (x[0:1], tf.reverse(x[1:2], [-2])  # type: ignore
+            ), 0)
+            x = tf.transpose(x, [1, 2, 0, 3])
+            # B, T, 2, H
+            x = tf.reshape(x, tf.concat((
+                tf.shape(x)[:2],  # type: ignore
+                (tf.shape(x)[2]*tf.shape(x)[3], ),  # type: ignore
+            ), 0))
+            # B, T, 2*H
         return x
 
     def compute_output_shape(
