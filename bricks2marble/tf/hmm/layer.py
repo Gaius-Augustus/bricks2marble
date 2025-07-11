@@ -1,16 +1,13 @@
 import tensorflow as tf
-from learnMSA.msa_hmm.MaximumExpectedAccuracy import maximum_expected_accuracy
-from learnMSA.msa_hmm.MsaHmmCell import HmmCell
-from learnMSA.msa_hmm.MsaHmmLayer import MsaHmmLayer as HmmLayer
-from learnMSA.msa_hmm.Viterbi import viterbi
+from hidten.tf import TFHMM, TFCategoricalEmitter
 
 from ..config import ModelConfig, with_config
 from ..util import UncertainPredictionRegularizer
-from .emitter import Emitter
-from .transitioner import Transitioner
+from .tools import (get_nuc_emission_distribution, left_right_3mers,
+                    state_start_dist, state_transitions)
 
 
-class HMMLayerConfig(ModelConfig):
+class AnnotationLayerConfig(ModelConfig):
 
     start_codons: list[tuple[str, float]] = [("ATG", 1.)]
     stop_codons: list[tuple[str, float]] = [
@@ -37,56 +34,73 @@ class HMMLayerConfig(ModelConfig):
         return 12 + 3*self.intron_state_chain
 
 
-@with_config(HMMLayerConfig)
-class HMMLayer(HmmLayer):
+@with_config(AnnotationLayerConfig)
+class AnnotationLayer(tf.keras.Layer):
 
-    config: HMMLayerConfig
+    config: AnnotationLayerConfig
 
     def post_config_init(self) -> None:
-        super().__init__(
-            cell=None,
-            num_seqs=None,
-            use_prior=False,
-            parallel_factor=self.config.parallel_factor,
+        self.hmm = TFHMM(
+            states=self.config.n_states,
+            heads=self.config.heads,
         )
 
-    def build(self, input_shape: tuple[int | None, ...]) -> None:
-        emitter = Emitter(
+        transitions, values, share = state_transitions(
+            isc=self.config.intron_state_chain,
+            T_exon=self.config.initial_exon_len,
+            T_intron=self.config.initial_intron_len,
+            T_ir=self.config.initial_ir_len,
+            heads=self.config.heads,
+        )
+
+        self.hmm.transitioner.allow = transitions
+        self.hmm.transitioner.share = share
+        self.hmm.transitioner.initializer = values
+
+        starts, values, share = state_start_dist(
+            isc=self.config.intron_state_chain,
+            heads=self.config.heads,
+        )
+
+        self.hmm.transitioner.allow_start = starts
+        self.hmm.transitioner.share_start = share
+        self.hmm.transitioner.start_dist_initializer = values
+
+        stream_emitter = TFCategoricalEmitter(
+            states=self.config.n_states,
+            heads=self.config.heads,
+        )
+        stream_emitter.initializer = tf.initializers.GlorotNormal()
+
+        nuc_emitter = TFCategoricalEmitter(
+            states=self.config.n_states,
+            heads=self.config.heads,
+        )
+        nuc_emitter.initializer = get_nuc_emission_distribution(
             start_codons=self.config.start_codons,
             stop_codons=self.config.stop_codons,
             intron_begin_pattern=self.config.intron_begin_pattern,
             intron_end_pattern=self.config.intron_end_pattern,
-            heads=self.config.heads,
-            use_reverse_strand=self.config.use_reverse_strand,
-            share_noncoding_params=self.config.share_noncoding_params,
-            intron_state_chain=self.config.intron_state_chain,
-        )
-        transitioner = Transitioner(
-            heads=self.config.heads,
-            initial_exon_len=self.config.initial_exon_len,
-            initial_intron_len=self.config.initial_intron_len,
-            initial_ir_len=self.config.initial_ir_len,
-            starting_distribution_trainable=self.config.train_start_dist,
-            transitions_trainable=self.config.train_transitions,
-            intron_state_chain=self.config.intron_state_chain,
-        )
+        ).flatten()
+        nuc_emitter.trainable = False
+
+        self.hmm.add_emitter(stream_emitter)
+        self.hmm.add_emitter(nuc_emitter)
+
         if self.config.nudge_IR > 0:
             self.regularizer = UncertainPredictionRegularizer(
                 weight=self.config.nudge_IR,
                 class_index=0,
             )
 
-        self.cell = HmmCell(
-            [emitter.config.n_states] * (self.config.heads),
-            dim=input_shape[-1],
-            emitter=emitter,
-            transitioner=transitioner,
-            use_fake_step_counter=True,
-            name="gene_pred_hmm_cell",
-        )
-        super().build(input_shape)
+    def build(self, input_shape: tuple[int | None, ...]) -> None:
+        self.hmm.build([input_shape, input_shape[:-1]+(5, )])
 
-    def prepare_input(self, x: tf.Tensor, nuc: tf.Tensor) -> tf.Tensor:
+    def prepare_input(
+        self,
+        x: tf.Tensor,
+        nuc: tf.Tensor,
+    ) -> tuple[tf.Tensor, tf.Tensor]:
         if self.config.use_reverse_strand:
             B, T, D = tf.unstack(tf.shape(nuc))  # type: ignore
             nuc = tf.expand_dims(nuc, 0)
@@ -100,24 +114,13 @@ class HMMLayer(HmmLayer):
         else:
             nuc = tf.expand_dims(nuc, 0)
             x = tf.expand_dims(x, 0)
-        x = tf.concat((x, nuc), axis=-1)  # type: ignore
-        return x
+        return x, nuc
 
-    def call(
-        self,
-        x: tf.Tensor,
-        nuc: tf.Tensor,
-        training: bool = False,
-        use_loglik: bool = True,
-    ) -> tf.Tensor:
-        x = self.prepare_input(x, nuc)
+    def call(self, x: tf.Tensor, nuc: tf.Tensor) -> tf.Tensor:
+        x, nuc = self.prepare_input(x, nuc)
+        nuc = left_right_3mers(nuc)  # type: ignore
 
-        x, _, _ = self.state_posterior_log_probs(
-            x,
-            return_prior=True,
-            training=training,
-            no_loglik=not use_loglik,
-        )  # type: ignore
+        x = self.hmm.posterior(x, nuc)
         x = tf.transpose(x, [1, 2, 0, 3])
 
         if self.config.use_reverse_strand:
@@ -150,13 +153,9 @@ class HMMLayer(HmmLayer):
         nuc: tf.Tensor,
     ) -> tf.Tensor:
         self.cell.recurrent_init()
-        x = self.prepare_input(x, nuc)
+        x, nuc = self.prepare_input(x, nuc)
 
-        x = viterbi(
-            x,
-            self.cell,
-            parallel_factor=self.parallel_factor,
-        )  # type: ignore
+        x = self.hmm.viterbi(x, nuc)
         x = tf.transpose(x, [1, 2, 0])
 
         if self.config.use_reverse_strand:

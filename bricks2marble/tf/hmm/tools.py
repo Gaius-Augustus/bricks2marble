@@ -120,12 +120,29 @@ def make_kmer(
     return k_mer
 
 
+@tf.function
+def left_right_3mers(nuc: tf.Tensor) -> tf.Tensor:
+    left_3mers = make_kmer(
+        nuc,
+        k=3,
+        pivot_left=True,
+        collapse_pivot=True,
+    )
+    right_3mers = make_kmer(
+        nuc,
+        k=3,
+        pivot_left=False,
+        collapse_pivot=True,
+    )
+    return tf.stack([left_3mers, right_3mers], axis=-2)
+
+
 def get_nuc_emission_distribution(
     start_codons: list[tuple[str, float]],
     stop_codons: list[tuple[str, float]],
     intron_begin_pattern: list[tuple[str, float]],
     intron_end_pattern: list[tuple[str, float]],
-) -> tf.Tensor:
+) -> np.ndarray:
     """Generates an emission probability matrix that imposes genetic
     rules on codons given codon distributions for different emerging
     patterns.
@@ -174,7 +191,7 @@ def get_nuc_emission_distribution(
     return tf.concat(
         [left_codon_probs, right_codon_probs],
         axis=0,
-    )  # type: ignore
+    ).numpy()  # type: ignore
 
 
 def state_transitions(
@@ -183,7 +200,9 @@ def state_transitions(
     T_intron: int = 10000,
     T_ir: int = 10000,
     heads: int = 1,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+) -> tuple[
+    list[tuple[int, int, int]], np.ndarray, list[tuple[int, int]],
+]:
     indices = np.array([
         [ 0,  0, np.log(T_ir - 1)],
         [ 0,  7, 0],
@@ -246,13 +265,13 @@ def state_transitions(
     #     [share + i*n_indices for i in range(heads)],
     #     axis=0,
     # )
-    return indices, values, None
+    return indices.tolist(), values, []
 
 
 def state_start_dist(
     isc: int = 1,
     heads: int = 1,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[list[tuple[int, int]], np.ndarray, list[tuple[int, int]]]:
     indices = np.array([
         [0, h, j] for h in range(heads) for j in range(12+3*isc)
     ])
@@ -270,4 +289,4 @@ def state_start_dist(
         [share + i*(12+3*isc) for i in range(heads)],
         axis=0,
     )
-    return indices, values, share
+    return indices.tolist(), values, share.tolist()
