@@ -132,7 +132,7 @@ def left_right_3mers(nuc: tf.Tensor) -> tuple[tf.Tensor, tf.Tensor]:
         tf.ones(
             tf.concat([tf.shape(nuc)[:-1], [1]], axis=0),  # type: ignore
             dtype=nuc.dtype,  # type: ignore
-        ) / 4096,
+        ) / 64,
     ], axis=-1)
     right_3mers = tf.concat([
         make_kmer(
@@ -144,7 +144,7 @@ def left_right_3mers(nuc: tf.Tensor) -> tuple[tf.Tensor, tf.Tensor]:
         tf.ones(
             tf.concat([tf.shape(nuc)[:-1], [1]], axis=0),  # type: ignore
             dtype=nuc.dtype,  # type: ignore
-        ) / 4096,
+        ) / 64,
     ], axis=-1)
 
     return left_3mers, right_3mers  # type: ignore
