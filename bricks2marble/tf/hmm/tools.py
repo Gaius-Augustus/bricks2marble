@@ -121,20 +121,33 @@ def make_kmer(
 
 
 @tf.function
-def left_right_3mers(nuc: tf.Tensor) -> tf.Tensor:
-    left_3mers = make_kmer(
-        nuc,
-        k=3,
-        pivot_left=True,
-        collapse_pivot=True,
-    )
-    right_3mers = make_kmer(
-        nuc,
-        k=3,
-        pivot_left=False,
-        collapse_pivot=True,
-    )
-    return tf.stack([left_3mers, right_3mers], axis=-2)
+def left_right_3mers(nuc: tf.Tensor) -> tuple[tf.Tensor, tf.Tensor]:
+    left_3mers = tf.concat([
+        make_kmer(
+            nuc,
+            k=3,
+            pivot_left=True,
+            collapse_pivot=True,
+        ),
+        tf.ones(
+            tf.concat([tf.shape(nuc)[:-1], [1]], axis=0),  # type: ignore
+            dtype=nuc.dtype,  # type: ignore
+        ) / 4096,
+    ], axis=-1)
+    right_3mers = tf.concat([
+        make_kmer(
+            nuc,
+            k=3,
+            pivot_left=False,
+            collapse_pivot=True,
+        ),
+        tf.ones(
+            tf.concat([tf.shape(nuc)[:-1], [1]], axis=0),  # type: ignore
+            dtype=nuc.dtype,  # type: ignore
+        ) / 4096,
+    ], axis=-1)
+
+    return left_3mers, right_3mers  # type: ignore
 
 
 def get_nuc_emission_distribution(
@@ -142,7 +155,9 @@ def get_nuc_emission_distribution(
     stop_codons: list[tuple[str, float]],
     intron_begin_pattern: list[tuple[str, float]],
     intron_end_pattern: list[tuple[str, float]],
-) -> np.ndarray:
+    intron_state_chain: int = 1,
+    heads: int = 1,
+) -> tuple[np.ndarray, np.ndarray]:
     """Generates an emission probability matrix that imposes genetic
     rules on codons given codon distributions for different emerging
     patterns.
@@ -152,12 +167,12 @@ def get_nuc_emission_distribution(
         (IR, I0, I1, I2, E0, E1), E2,
         START, EI0, EI1, EI2, IE0, IE1, IE2, STOP
     ```
-    where the first 6 states do not have any codon restrictions and are
-    therefore omitted.
+    where the first 6 states do not have any codon restrictions.
 
     Returns:
-        tf.Tensor: A tensor of shape ``(2, 15, 64)`` for left and right
-            pivoted codons.
+        tuple[np.ndarray, np.ndarray]: Two arrays of shape
+            ``(heads, 12+3*isc, 65)`` for left and right pivoted codons,
+            where ``isc`` is the intron_state_chain argument.
     """
     start_codon_probs = make_codon_probs(start_codons, True)
     stop_codon_probs = make_codon_probs(stop_codons, False)
@@ -188,10 +203,37 @@ def get_nuc_emission_distribution(
         axis=1,
     )
 
-    return tf.concat(
-        [left_codon_probs, right_codon_probs],
-        axis=0,
-    ).numpy()  # type: ignore
+    left_codon_probs = tf.concat(
+        [left_codon_probs[0], tf.zeros((9, 1))],  # type: ignore
+        axis=-1,
+    )
+    right_codon_probs = tf.concat(
+        [right_codon_probs[0], tf.zeros((9, 1))],  # type: ignore
+        axis=-1,
+    )
+    non_restricted_states = tf.concat([
+        tf.zeros((3+3*intron_state_chain, 64)),
+        tf.ones((3+3*intron_state_chain, 1)),
+    ], axis=-1)
+    left_codon_probs = tf.concat([
+        non_restricted_states,
+        left_codon_probs,
+    ], axis=0)
+    right_codon_probs = tf.concat([
+        non_restricted_states,
+        right_codon_probs,
+    ], axis=0)
+
+    left_codon_probs = tf.tile(
+        tf.expand_dims(left_codon_probs, axis=0),
+        (heads, 1, 1),
+    )
+    right_codon_probs = tf.tile(
+        tf.expand_dims(right_codon_probs, axis=0),
+        (heads, 1, 1),
+    )
+
+    return left_codon_probs.numpy(), right_codon_probs.numpy()  # type: ignore
 
 
 def state_transitions(
@@ -255,6 +297,7 @@ def state_transitions(
     indices = np.tile(indices, (heads, 1, 1))
     indices = np.concatenate([repeats, indices], axis=-1, dtype=np.int64)
     indices = indices.reshape(-1, 3)
+    values = np.exp(values) / np.sum(np.exp(values), -1, keepdims=True)
     values = np.tile(values, heads)
 
     # share = np.array(
@@ -273,14 +316,16 @@ def state_start_dist(
     heads: int = 1,
 ) -> tuple[list[tuple[int, int]], np.ndarray, list[tuple[int, int]]]:
     indices = np.array([
-        [0, h, j] for h in range(heads) for j in range(12+3*isc)
+        [h, j] for h in range(heads) for j in range(12+3*isc)
     ])
     values = np.array([
         np.log(100),
         np.log(4),
         np.log(10), np.log(20), np.log(10),
         0,
-    ]*heads, dtype=np.float32)
+    ], dtype=np.float32)
+    values = np.exp(values) / np.sum(np.exp(values), -1, keepdims=True)
+    values = np.tile(values, heads)
 
     share = np.array([
         [1, 1+3*isc], [4+3*isc,12+3*isc]

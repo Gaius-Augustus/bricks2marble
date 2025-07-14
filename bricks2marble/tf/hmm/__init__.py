@@ -1,2 +1,2 @@
-from .layer import HMMLayer
+from .layer import AnnotationHMM
 from .transitioner import STATES

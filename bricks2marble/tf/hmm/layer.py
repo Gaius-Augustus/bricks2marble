@@ -7,7 +7,7 @@ from .tools import (get_nuc_emission_distribution, left_right_3mers,
                     state_start_dist, state_transitions)
 
 
-class AnnotationLayerConfig(ModelConfig):
+class AnnotationHMMConfig(ModelConfig):
 
     start_codons: list[tuple[str, float]] = [("ATG", 1.)]
     stop_codons: list[tuple[str, float]] = [
@@ -34,10 +34,10 @@ class AnnotationLayerConfig(ModelConfig):
         return 12 + 3*self.intron_state_chain
 
 
-@with_config(AnnotationLayerConfig)
-class AnnotationLayer(tf.keras.Layer):
+@with_config(AnnotationHMMConfig)
+class AnnotationHMM(tf.keras.Layer):
 
-    config: AnnotationLayerConfig
+    config: AnnotationHMMConfig
 
     def post_config_init(self) -> None:
         self.hmm = TFHMM(
@@ -72,20 +72,31 @@ class AnnotationLayer(tf.keras.Layer):
         )
         stream_emitter.initializer = tf.initializers.GlorotNormal()
 
-        nuc_emitter = TFCategoricalEmitter(
+        nuc_emitter_left = TFCategoricalEmitter(
             states=self.config.n_states,
             heads=self.config.heads,
         )
-        nuc_emitter.initializer = get_nuc_emission_distribution(
+        nuc_emitter_right = TFCategoricalEmitter(
+            states=self.config.n_states,
+            heads=self.config.heads,
+        )
+        emissions_left, emissions_right = get_nuc_emission_distribution(
             start_codons=self.config.start_codons,
             stop_codons=self.config.stop_codons,
             intron_begin_pattern=self.config.intron_begin_pattern,
             intron_end_pattern=self.config.intron_end_pattern,
-        ).flatten()
-        nuc_emitter.trainable = False
+            intron_state_chain=self.config.intron_state_chain,
+            heads=self.config.heads,
+        )
+
+        nuc_emitter_left.initializer = emissions_left.flatten()
+        nuc_emitter_left.trainable = False
+        nuc_emitter_right.initializer = emissions_right.flatten()
+        nuc_emitter_right.trainable = False
 
         self.hmm.add_emitter(stream_emitter)
-        self.hmm.add_emitter(nuc_emitter)
+        self.hmm.add_emitter(nuc_emitter_left)
+        self.hmm.add_emitter(nuc_emitter_right)
 
         if self.config.nudge_IR > 0:
             self.regularizer = UncertainPredictionRegularizer(
@@ -93,8 +104,14 @@ class AnnotationLayer(tf.keras.Layer):
                 class_index=0,
             )
 
+        super().__init__()
+
     def build(self, input_shape: tuple[int | None, ...]) -> None:
-        self.hmm.build([input_shape, input_shape[:-1]+(5, )])
+        self.hmm.build((
+            input_shape,
+            input_shape[:-1] + (65, ),
+            input_shape[:-1] + (65, ),
+        ))
 
     def prepare_input(
         self,
@@ -107,21 +124,17 @@ class AnnotationLayer(tf.keras.Layer):
             nuc_reverse = tf.gather(nuc, [3, 2, 1, 0, 4], axis=-1)
             nuc_reverse = tf.reverse(nuc_reverse, [-2])
             nuc = tf.concat((nuc, nuc_reverse), axis=0)  # type: ignore
-            nuc = tf.reshape(nuc, (1, 2*B, T, D))
+            nuc = tf.reshape(nuc, (2*B, T, D))
             x = tf.expand_dims(x, 0)
             x = tf.concat((x, tf.reverse(x, [-2])), axis=0)  # type: ignore
-            x = tf.reshape(x, (1, 2*B, T, -1))
-        else:
-            nuc = tf.expand_dims(nuc, 0)
-            x = tf.expand_dims(x, 0)
+            x = tf.reshape(x, (2*B, T, -1))
         return x, nuc
 
     def call(self, x: tf.Tensor, nuc: tf.Tensor) -> tf.Tensor:
         x, nuc = self.prepare_input(x, nuc)
-        nuc = left_right_3mers(nuc)  # type: ignore
+        nuc_left, nuc_right = left_right_3mers(nuc)  # type: ignore
 
-        x = self.hmm.posterior(x, nuc)
-        x = tf.transpose(x, [1, 2, 0, 3])
+        x = self.hmm.posterior(x, nuc_left, nuc_right)
 
         if self.config.use_reverse_strand:
             # 2*B, T, H, D
