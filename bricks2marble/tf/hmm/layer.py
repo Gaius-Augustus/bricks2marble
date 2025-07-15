@@ -64,22 +64,14 @@ class AnnotationHMM(tf.keras.Layer):
 
         self.hmm.transitioner.allow_start = starts
         self.hmm.transitioner.share_start = share
-        self.hmm.transitioner.start_dist_initializer = values
+        self.hmm.transitioner.initializer_start = values
 
-        stream_emitter = TFCategoricalEmitter(
-            states=self.config.n_states,
-            heads=self.config.heads,
-        )
+        stream_emitter = TFCategoricalEmitter()
         stream_emitter.initializer = tf.initializers.GlorotNormal()
 
-        nuc_emitter_left = TFCategoricalEmitter(
-            states=self.config.n_states,
-            heads=self.config.heads,
-        )
-        nuc_emitter_right = TFCategoricalEmitter(
-            states=self.config.n_states,
-            heads=self.config.heads,
-        )
+        nuc_emitter_left = TFCategoricalEmitter()
+        nuc_emitter_right = TFCategoricalEmitter()
+
         emissions_left, emissions_right = get_nuc_emission_distribution(
             start_codons=self.config.start_codons,
             stop_codons=self.config.stop_codons,
