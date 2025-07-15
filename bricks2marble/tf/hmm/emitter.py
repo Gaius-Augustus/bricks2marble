@@ -12,12 +12,16 @@ class EmitterConfig(ModelConfig):
     stop_codons: list[tuple[str, float]]
     intron_begin_pattern: list[tuple[str, float]]
     intron_end_pattern: list[tuple[str, float]]
+    intron_state_chain: int = 1
 
     heads: int = 1
-    n_states: int = 15
     use_reverse_strand: bool = False
 
     share_noncoding_params: bool = False
+
+    @property
+    def n_states(self) -> int:
+        return 12 + 3*self.intron_state_chain
 
 
 @with_config(EmitterConfig)
@@ -34,7 +38,7 @@ class Emitter(tf.keras.layers.Layer):
             shape=[
                 self.config.heads,
                 self.config.n_states if not self.config.share_noncoding_params
-                    else self.config.n_states - 3,
+                    else self.config.n_states-3*self.config.intron_state_chain,
                 input_shape[-1],
             ],
             initializer=tf.initializers.GlorotNormal(),
@@ -56,13 +60,15 @@ class Emitter(tf.keras.layers.Layer):
 
     def make_B(self):
         if self.config.share_noncoding_params:
-            B = tf.concat([
-                self.emission_kernel[:, :1, :],
-                self.emission_kernel[:, :1, :],
-                self.emission_kernel[:, :1, :],
-                self.emission_kernel[:, :1, :],
-                self.emission_kernel[:, 1:, :],
-            ], axis=1)
+            B = tf.concat(
+                [self.emission_kernel[:, :1, :]]
+                + [
+                    self.emission_kernel[:, :1, :],
+                    self.emission_kernel[:, :1, :],
+                    self.emission_kernel[:, :1, :],
+                ] * self.config.intron_state_chain
+                + [self.emission_kernel[:, 1:, :]]
+            , axis=1)
             return tf.nn.softmax(B)
         return tf.nn.softmax(self.emission_kernel)
 
@@ -95,7 +101,10 @@ class Emitter(tf.keras.layers.Layer):
         )
         codon_emit = tf.reduce_prod(codon_emit, axis=-2)
         codon_emit = tf.concat([
-            tf.ones_like(codon_emit[..., :6]) / 4096.,
+            tf.ones(tf.concat((
+                tf.shape(codon_emit)[:-1],  # type: ignore
+                [3 + 3*self.config.intron_state_chain],
+            ), axis=0)) / 4096.,
             codon_emit,
         ], axis=-1)
         if training:

@@ -1,9 +1,11 @@
 import tensorflow as tf
+from learnMSA.msa_hmm.MaximumExpectedAccuracy import maximum_expected_accuracy
 from learnMSA.msa_hmm.MsaHmmCell import HmmCell
 from learnMSA.msa_hmm.MsaHmmLayer import MsaHmmLayer as HmmLayer
 from learnMSA.msa_hmm.Viterbi import viterbi
 
 from ..config import ModelConfig, with_config
+from ..util import UncertainPredictionRegularizer
 from .emitter import Emitter
 from .transitioner import Transitioner
 
@@ -24,9 +26,15 @@ class HMMLayerConfig(ModelConfig):
     initial_exon_len: int = 100
     initial_intron_len: int = 10000
     initial_ir_len: int = 10000
+    intron_state_chain: int = 1
     train_transitions: bool = True
     train_start_dist: bool = True
     share_noncoding_params: bool = False
+    nudge_IR: float = 0.0
+
+    @property
+    def n_states(self) -> int:
+        return 12 + 3*self.intron_state_chain
 
 
 @with_config(HMMLayerConfig)
@@ -51,6 +59,7 @@ class HMMLayer(HmmLayer):
             heads=self.config.heads,
             use_reverse_strand=self.config.use_reverse_strand,
             share_noncoding_params=self.config.share_noncoding_params,
+            intron_state_chain=self.config.intron_state_chain,
         )
         transitioner = Transitioner(
             heads=self.config.heads,
@@ -59,7 +68,13 @@ class HMMLayer(HmmLayer):
             initial_ir_len=self.config.initial_ir_len,
             starting_distribution_trainable=self.config.train_start_dist,
             transitions_trainable=self.config.train_transitions,
+            intron_state_chain=self.config.intron_state_chain,
         )
+        if self.config.nudge_IR > 0:
+            self.regularizer = UncertainPredictionRegularizer(
+                weight=self.config.nudge_IR,
+                class_index=0,
+            )
 
         self.cell = HmmCell(
             [emitter.config.n_states] * (self.config.heads),
@@ -71,13 +86,7 @@ class HMMLayer(HmmLayer):
         )
         super().build(input_shape)
 
-    def call(
-        self,
-        x: tf.Tensor,
-        nuc: tf.Tensor,
-        training: bool = False,
-        use_loglik: bool = True,
-    ) -> tf.Tensor:
+    def prepare_input(self, x: tf.Tensor, nuc: tf.Tensor) -> tf.Tensor:
         if self.config.use_reverse_strand:
             B, T, D = tf.unstack(tf.shape(nuc))  # type: ignore
             nuc = tf.expand_dims(nuc, 0)
@@ -92,6 +101,16 @@ class HMMLayer(HmmLayer):
             nuc = tf.expand_dims(nuc, 0)
             x = tf.expand_dims(x, 0)
         x = tf.concat((x, nuc), axis=-1)  # type: ignore
+        return x
+
+    def call(
+        self,
+        x: tf.Tensor,
+        nuc: tf.Tensor,
+        training: bool = False,
+        use_loglik: bool = True,
+    ) -> tf.Tensor:
+        x = self.prepare_input(x, nuc)
 
         x, _, _ = self.state_posterior_log_probs(
             x,
@@ -121,6 +140,8 @@ class HMMLayer(HmmLayer):
             ), 0))
             # B, T, 2*H, D
 
+        if self.config.nudge_IR > 0:
+            self.regularizer(tf.nn.softmax(x, axis=-1))
         return x
 
     def viterbi(
@@ -129,20 +150,7 @@ class HMMLayer(HmmLayer):
         nuc: tf.Tensor,
     ) -> tf.Tensor:
         self.cell.recurrent_init()
-        if self.config.use_reverse_strand:
-            B, T, D = tf.unstack(tf.shape(nuc))  # type: ignore
-            nuc = tf.expand_dims(nuc, 0)
-            nuc_reverse = tf.gather(nuc, [3, 2, 1, 0, 4], axis=-1)
-            nuc_reverse = tf.reverse(nuc_reverse, [-2])
-            nuc = tf.concat((nuc, nuc_reverse), axis=0)  # type: ignore
-            nuc = tf.reshape(nuc, (1, 2*B, T, D))
-            x = tf.expand_dims(x, 0)
-            x = tf.concat((x, tf.reverse(x, [-2])), axis=0)  # type: ignore
-            x = tf.reshape(x, (1, 2*B, T, -1))
-        else:
-            nuc = tf.expand_dims(nuc, 0)
-            x = tf.expand_dims(x, 0)
-        x = tf.concat((x, nuc), axis=-1)  # type: ignore
+        x = self.prepare_input(x, nuc)
 
         x = viterbi(
             x,
@@ -171,3 +179,54 @@ class HMMLayer(HmmLayer):
             # B, T, 2*H
 
         return x
+
+    def mea(
+        self,
+        x: tf.Tensor,
+        nuc: tf.Tensor,
+        training: bool = False,
+        use_loglik: bool = True,
+    ) -> tf.Tensor:
+        x = self.prepare_input(x, nuc)
+        log_post = self.state_posterior_log_probs(
+            x,
+            training=training,
+            no_loglik=not use_loglik,
+        )
+        post = tf.nn.softmax(log_post, axis=-1)
+        # H, 2*B, T, D
+        x = maximum_expected_accuracy(
+            post,
+            self.cell,
+            parallel_factor=self.parallel_factor,
+        )
+        # H, 2*B, T
+        x = tf.transpose(x, [1, 2, 0])
+        # 2*B, T, H
+        if self.config.use_reverse_strand:
+            x = tf.reshape(x, tf.concat((
+                (2, ),
+                (tf.shape(x)[0]//2, ),  # type: ignore
+                tf.shape(x)[1:]  # type: ignore
+            ), 0))
+            # 2, B, T, H
+            x = tf.concat(
+                (x[0:1], tf.reverse(x[1:2], [-2])  # type: ignore
+            ), 0)
+            x = tf.transpose(x, [1, 2, 0, 3])
+            # B, T, 2, H
+            x = tf.reshape(x, tf.concat((
+                tf.shape(x)[:2],  # type: ignore
+                (tf.shape(x)[2]*tf.shape(x)[3], ),  # type: ignore
+            ), 0))
+            # B, T, 2*H
+        return x
+
+    def compute_output_shape(
+        self,
+        input_shape: tuple[int | None, ...],
+    ) -> tuple[int | None, ...]:
+        return input_shape[:-1] + (
+            (2 if self.config.use_reverse_strand else 1) * self.config.heads,
+            self.config.n_states,
+        )

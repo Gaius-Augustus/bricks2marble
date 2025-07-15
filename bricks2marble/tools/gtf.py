@@ -2,8 +2,13 @@ import random
 import re
 import string
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
+import plotly.express as px
+from plotly import graph_objects as go
+from plotly.subplots import make_subplots
+from plotly.validator_cache import ValidatorCache
 from pydantic import BaseModel, ValidationError
 
 from ..struct import Annotation
@@ -123,3 +128,90 @@ def compare_gtf(
             transcript=CompareMetrics(sensitivity=0, precision=0),
             locus=CompareMetrics(sensitivity=0, precision=0),
         )
+
+
+def plot_comparison(
+    metrics: Sequence[AnnotationComparison],
+    labels: Sequence[str] | None = None,
+    zoom: bool = False,
+) -> go.Figure:
+    fig = make_subplots(
+        rows=2,
+        cols=3,
+        subplot_titles=[
+            "Base",
+            "Intron",
+            "Transcript",
+            "Exon",
+            "Intron-Chain",
+            "Locus",
+        ],
+        horizontal_spacing=0.05,
+        vertical_spacing=0.1,
+    )
+    keys = ["base", "intron", "transcript", "exon", "intron_chain", "locus"]
+
+    SymbolValidator = ValidatorCache.get_validator("scatter.marker", "symbol")
+    raw_symbols = SymbolValidator.values[2:19*12:12]
+    colors = px.colors.qualitative.Plotly
+
+    for i, metric in enumerate(metrics):
+        for j, key in enumerate(keys):
+            row = j // 3 + 1
+            col = j % 3 + 1
+            fig.add_trace(go.Scatter(
+                x=[getattr(metric, key).sensitivity],
+                y=[getattr(metric, key).precision],
+                name=f"Model {i+1}" if labels is None else labels[i],
+                marker_symbol=raw_symbols[i%10],
+                marker_color=colors[i],
+                showlegend=j==0,
+                legendgroup=f"group {i}",
+            ), row=row, col=col)
+
+    for j, key in enumerate(keys):
+        row = j // 3 + 1
+        col = j % 3 + 1
+        fig.update_xaxes(
+            range=[0, 1] if not zoom else None,
+            scaleanchor=f'y{j+1}' if not zoom else None,
+            constrain='domain',
+            row=row,
+            col=col,
+            dtick=.1 if not zoom else None,
+        )
+        fig.update_yaxes(
+            range=[0, 1] if not zoom else None,
+            constrain='domain',
+            row=row,
+            col=col,
+            dtick=.1 if not zoom else None,
+        )
+
+        fig.add_annotation(
+            text="Sensitivity",
+            xref=f"x{j+1}", yref=f"y{j+1}",
+            x=1.0, y=0,
+            showarrow=False,
+            font=dict(size=14),
+            opacity=0.5,
+            xanchor="right", yanchor="bottom",
+        )
+        fig.add_annotation(
+            text="Precision",
+            xref=f"x{j+1}", yref=f"y{j+1}",
+            x=0, y=1.0,
+            showarrow=False,
+            font=dict(size=14),
+            opacity=0.5,
+            textangle=-90,
+            xanchor="left", yanchor="top",
+        )
+
+    fig.update_layout(
+        width=1000,
+        height=600,
+        margin=dict(l=30, r=0, t=30, b=30),
+        title=dict(xref="container", yref="container", yanchor="bottom"),
+    )
+    return fig
