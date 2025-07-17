@@ -379,6 +379,9 @@ class FASTA:
             return FASTA(self._sequences[key])
         return self._sequences[key]
 
+    def __len__(self) -> int:
+        return len(self._sequences)
+
     def __str__(self) -> str:
         return "[" + ", ".join(str(seq) for seq in self._sequences) + "]"
 

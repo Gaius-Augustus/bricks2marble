@@ -4,7 +4,7 @@ import bricks2marble as b2m
 
 
 def test_load(gtf_path: Path) -> None:
-    annotation = b2m.load_gtf(gtf_path)
+    annotation = b2m.io.load_gtf(gtf_path)
 
     assert annotation._genes["g1"]._transcripts["g1.t1"].entries[
         b2m.struct.FeatureType.Transcript

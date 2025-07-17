@@ -6,7 +6,7 @@ import bricks2marble as b2m
 
 
 def test_fasta(fasta_path: Path) -> None:
-    fasta = b2m.load_fasta(fasta_path, T=5)
+    fasta = b2m.io.load_fasta(fasta_path, T=5)
 
     assert fasta.nuc.shape == (9, 5)
 
@@ -74,7 +74,7 @@ def test_fasta(fasta_path: Path) -> None:
 
 
 def test_resample(fasta_path: Path) -> None:
-    fasta = b2m.load_fasta(fasta_path, T=5)
+    fasta = b2m.io.load_fasta(fasta_path, T=5)
 
     assert fasta.nuc.shape == (9, 5)
 
@@ -135,7 +135,7 @@ def test_resample(fasta_path: Path) -> None:
 
 
 def test_slice(fasta_path: Path) -> None:
-    fasta = b2m.load_fasta(fasta_path, T=5)
+    fasta = b2m.io.load_fasta(fasta_path, T=5)
     seq = fasta[0].positions(14)
     np.testing.assert_allclose(
         seq.nuc,
@@ -151,7 +151,7 @@ def test_slice(fasta_path: Path) -> None:
         ("name abc", 10, 14),
     ]
 
-    fasta = b2m.load_fasta(fasta_path, T=5)
+    fasta = b2m.io.load_fasta(fasta_path, T=5)
     seq = fasta[0].positions(27)
     np.testing.assert_allclose(
         seq.nuc,
@@ -173,7 +173,7 @@ def test_slice(fasta_path: Path) -> None:
         ("name abc", 25, 27),
     ]
 
-    fasta = b2m.load_fasta(fasta_path, T=5)
+    fasta = b2m.io.load_fasta(fasta_path, T=5)
     seq = fasta[0].positions(7, 27)
     np.testing.assert_allclose(
         seq.nuc,
