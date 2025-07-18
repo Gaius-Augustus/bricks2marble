@@ -1,6 +1,6 @@
 import csv
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Callable
 from collections import OrderedDict
 from collections.abc import Iterator
 
@@ -16,6 +16,19 @@ class Gene:
         self.start = -1
         self.end = -1
         self._transcripts: OrderedDict[str, Transcript] = OrderedDict()
+
+    def rename(self, name: str | Callable[[str], str]) -> None:
+        """Changes the name of the sequence this gene is located in by
+        changing the names in all transcripts of this gene.
+
+        Args:
+            name (str | callable): If a string is given, changes all
+                sequence names to that string. If a callable is given,
+                this callable is applied to the sequence names, which
+                are then set to the returned string.
+        """
+        for key in self._transcripts:
+            self._transcripts[key].rename(name)
 
     def finalize(self) -> None:
         """Add to all Transcript objects transcript, intron, CDS, exon
@@ -106,6 +119,18 @@ class Annotation:
                 self._genes[gene_id].add(entry, transcript_id)
         else:
             raise ValueError("gene_id has to be supplied")
+
+    def rename(self, name: str | Callable[[str], str]) -> None:
+        """Changes the names of all sequences in this annotation.
+
+        Args:
+            name (str | callable): If a string is given, changes all
+                sequence names to that string. If a callable is given,
+                this callable is applied to the sequence names, which
+                are then set to the returned string.
+        """
+        for key in self._genes:
+            self._genes[key].rename(name)
 
     def finalize(self) -> None:
         """Add to all Transcript objects transcript, intron, CDS, exon

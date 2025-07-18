@@ -1,7 +1,7 @@
 import bisect
 import re
 from enum import Enum
-from typing import Literal
+from typing import Literal, Callable
 
 from .fasta import Region
 
@@ -154,6 +154,27 @@ class Transcript:
         if self.end < 0 or entry.end > self.end:
             self.end = entry.end
         self.source = entry.source
+
+    def rename(self, name: str | Callable[[str], str]) -> None:
+        """Changes the name of the sequence this transcript is located
+        in. Also changes the sequence names in all contained GTF
+        entries.
+
+        Args:
+            name (str | callable): If a string is given, changes the
+                sequence name to that string. If a callable is given,
+                this callable is applied to the sequence name, which is
+                then set to the returned string.
+        """
+        if isinstance(name, str):
+            rename = lambda _: name
+        else:
+            rename = name
+
+        for key in self.entries:
+            for entry in self.entries[key]:
+                entry.name = rename(entry.name)
+        self.seqname = rename(self.seqname)
 
     def coords_per_frame(
         self,
