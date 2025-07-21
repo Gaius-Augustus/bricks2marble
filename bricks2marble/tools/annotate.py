@@ -3,7 +3,7 @@ from typing import Callable, Literal
 
 import numpy as np
 
-from .struct import FASTA, Annotation, FeatureType, GTFEntry, Region, Sequence
+from ..struct import FASTA, Annotation, FeatureType, GTFEntry, Region, Sequence
 
 HMM_STATE_AGGREGATION = np.array([
     [1., 0., 0., 0., 0.],
@@ -171,15 +171,13 @@ def _annotation_from_dict(
     tx_id = 0
     for seq in entries_fwd:
         phase = -1
-        while len(entries_fwd[seq]) + len(entries_bwd[seq]) > 0:
-            fwd = False
-            if len(entries_fwd[seq]) > 0 and len(entries_bwd[seq]) > 0 and (
+        len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
+        len_bwd = 0 if seq not in entries_bwd else len(entries_bwd[seq])
+        while len_fwd + len_bwd > 0:
+            fwd = len_fwd > 0 or (
+                len_fwd > 0 and len_bwd > 0 and
                 entries_fwd[seq][0][0].start >= entries_bwd[seq][0][0].start
-            ):
-                fwd = True
-            elif len(entries_fwd[seq]) > 0:
-                fwd = True
-
+            )
             if fwd:
                 tx = entries_fwd[seq].pop(0)
             else:
@@ -208,7 +206,9 @@ def _annotation_from_dict(
                     transcript_id=t_id,
                 )
                 if r.name == "CDS":
-                    phase = (3 - (r.end - r.start + 1 - phase) % 3) % 3
+                    phase = (3 - (r.end - r.start - phase) % 3) % 3
+            len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
+            len_bwd = 0 if seq not in entries_bwd else len(entries_bwd[seq])
     return annotation
 
 
@@ -325,7 +325,7 @@ def GTF_from_model(
             if (re_txs_f is None and is_ir_f and start_f and last_end_f and
                 (i == 0 or labels_fwd[i-1, -1] == labels_fwd[i, 0])
             ):
-                last_end_f[-1].start = start_f[0].start
+                last_end_f[-1].end = start_f[0].end
                 last_end_f += start_f[1:]
                 entries_fwd[segment.name] += [last_end_f]
 
@@ -356,7 +356,7 @@ def GTF_from_model(
             if (re_txs_b is None and is_ir_b and start_b and last_end_b and
                 (i == 0 or labels_bwd[i-1, -1] == labels_bwd[i, 0])
             ):
-                last_end_b[-1].start = start_b[0].start
+                last_end_b[-1].end = start_b[0].end
                 last_end_b += start_b[1:]
                 entries_bwd[segment.name] += [last_end_b]
 
@@ -405,7 +405,7 @@ def GTF_from_model(
                     entries_fwd[segment.name] = _merge_reprediction(
                         entries_fwd[segment.name],
                         re_txs,
-                        c_re.end + coord_diff//2,
+                        c_re.start + coord_diff // 2,
                     )
                 last_end_f = end_f
 
@@ -434,7 +434,7 @@ def GTF_from_model(
                     entries_bwd[segment.name] = _merge_reprediction(
                         entries_bwd[segment.name],
                         re_txs,
-                        c_re.end + coord_diff//2,
+                        c_re.start + coord_diff // 2,
                     )
                 last_end_b = end_b
 

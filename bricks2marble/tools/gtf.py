@@ -106,8 +106,8 @@ def compare_gtf(
                 sensitivity = float(match.group(2))
                 precision = float(match.group(3))
                 results[level] = {
-                    'sensitivity': sensitivity,
-                    'precision': precision
+                    'sensitivity': sensitivity / 100,
+                    'precision': precision / 100,
                 }
 
     generated += [".annotated.gtf", ".loci", ".stats", ".tracking"]
