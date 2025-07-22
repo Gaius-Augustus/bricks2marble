@@ -61,10 +61,12 @@ def compare_gtf(
         AnnotationComparison: See
             :class:`bricks2marble.tools.gtf.AnnotationComparison`.
     """
-    if isinstance(annotation, str): annotation = Path(annotation)
-    if isinstance(reference, str): reference = Path(reference)
-    if isinstance(gffcompare, Path): gffcompare = str(gffcompare)
-    if gffcompare is None: gffcompare = "gffcompare"
+    if isinstance(annotation, str): annotation = Path(annotation).expanduser()
+    if isinstance(reference, str): reference = Path(reference).expanduser()
+    if isinstance(gffcompare, Path | str):
+        gffcompare = str(Path(gffcompare).expanduser())
+    elif gffcompare is None:
+        gffcompare = "gffcompare"
 
     random_id = "".join(
         random.choices(string.ascii_uppercase + string.digits, k=10)

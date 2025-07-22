@@ -369,15 +369,20 @@ class FASTA:
         return FASTA([seq.copy() for seq in self._sequences])
 
     @overload
-    def __getitem__(self, key: int) -> Sequence:
+    def __getitem__(self, key: int | str) -> Sequence:
         ...
     @overload
     def __getitem__(self, key: slice) -> "FASTA":
         ...
-    def __getitem__(self, key: int | slice) -> "Sequence | FASTA":
+    def __getitem__(self, key: int | slice | str) -> "Sequence | FASTA":
         if isinstance(key, slice):
             return FASTA(self._sequences[key])
-        return self._sequences[key]
+        if isinstance(key, int):
+            return self._sequences[key]
+        for seq in self._sequences:
+            if seq.name == key:
+                return seq
+        raise KeyError(f"Sequence with name {key!r} does not exist.")
 
     def __len__(self) -> int:
         return len(self._sequences)
