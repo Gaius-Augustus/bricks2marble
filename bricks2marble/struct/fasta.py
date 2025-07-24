@@ -1,4 +1,4 @@
-from typing import Literal, overload
+from typing import Callable, Literal, overload
 
 import numpy as np
 from pydantic import BaseModel
@@ -364,6 +364,23 @@ class FASTA:
             ) / self.size
             for k in occs[0]
         }
+
+    def rename(self, name: str | Callable[[str], str]) -> None:
+        """Changes the name of all sequences in this FASTA object.
+
+        Args:
+            name (str | callable): If a string is given, changes the
+                sequence names to that string. If a callable is given,
+                this callable is applied to the sequence names, which
+                are then set to the returned string.
+        """
+        if isinstance(name, str):
+            rename = lambda _: name
+        else:
+            rename = name
+
+        for seq in self._sequences:
+            seq.name = rename(seq.name)
 
     def copy(self) -> "FASTA":
         return FASTA([seq.copy() for seq in self._sequences])
