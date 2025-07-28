@@ -4,6 +4,7 @@ import string
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
+from typing import overload
 
 import plotly.express as px
 from plotly import graph_objects as go
@@ -30,11 +31,25 @@ class AnnotationComparison(BaseModel):
     locus: CompareMetrics
 
 
+@overload
 def compare_gtf(
     annotation: Annotation | Path | str,
     reference: Annotation | Path | str,
-    gffcompare: Path | str | None = None,
+    gffcompare: Path | str | None = ...,
 ) -> AnnotationComparison:
+    ...
+@overload
+def compare_gtf(
+    annotation: list[Annotation | Path | str],
+    reference: Annotation | Path | str,
+    gffcompare: Path | str | None = ...,
+) -> list[AnnotationComparison]:
+    ...
+def compare_gtf(
+    annotation: Annotation | Path | str | list[Annotation | Path | str],
+    reference: Annotation | Path | str,
+    gffcompare: Path | str | None = None,
+) -> AnnotationComparison | list[AnnotationComparison]:
     """Compare two annotation with the tool gffcompare:
     https://github.com/gpertea/gffcompare
 
@@ -48,7 +63,10 @@ def compare_gtf(
             compare to the reference. If an
             :class:`~bricks2marble.struct.annotation.Annotation` is
             given, this will be converted to a gtf file first with the
-            `.to_gtf()` method.
+            `.to_gtf()` method. You can also supply a sequence of
+            annotations, each of which are then compared to the
+            reference and metrics for all of these comparisons are
+            returned.
         reference (Annotation or Path): The reference annotation. If an
             :class:`~bricks2marble.struct.annotation.Annotation` is
             given, this will be converted to a gtf file first with the
@@ -59,9 +77,18 @@ def compare_gtf(
 
     Returns:
         AnnotationComparison: See
-            :class:`bricks2marble.tools.gtf.AnnotationComparison`.
+            :class:`bricks2marble.tools.gtf.AnnotationComparison`. If a
+            sequence of annotations is given, instead is a sequence of
+            comparisons.
     """
-    if isinstance(annotation, str): annotation = Path(annotation).expanduser()
+    seq_given = True
+    if not isinstance(annotation, list):
+        annotation = [annotation]
+        seq_given = False
+
+    for i in range(len(annotation)):
+        if isinstance(annotation[i], str):
+            annotation[i] = Path(annotation[i]).expanduser()
     if isinstance(reference, str): reference = Path(reference).expanduser()
     if isinstance(gffcompare, Path | str):
         gffcompare = str(Path(gffcompare).expanduser())
@@ -76,41 +103,44 @@ def compare_gtf(
 
     generated: list[str] = []
 
-    if isinstance(annotation, Annotation):
-        annotation.to_gtf(cache_dir / "annotation.gtf")
-        annotation = cache_dir / "annotation.gtf"
-        generated.append(str(annotation))
+    for i in range(len(annotation)):
+        if isinstance(annotation[i], Annotation):
+            annotation[i].to_gtf(cache_dir / f"annotation_{i}.gtf")
+            annotation[i] = cache_dir / f"annotation_{i}.gtf"
+            generated.append(str(annotation[i]))
     if isinstance(reference, Annotation):
         reference.to_gtf(cache_dir / "reference.gtf")
         reference = cache_dir / "reference.gtf"
         generated.append(str(reference))
 
-    subprocess.run([
-        f"{gffcompare}",
-        "--strict-match",
-        "-e 0",
-        "-T",
-        "-o",
-        str(cache_dir) + ("/" if not str(cache_dir).endswith("/") else ""),
-        "-r",
-        str(reference),
-        str(annotation),
-    ], check=True)
+    results = []
+    for i in range(len(annotation)):
+        subprocess.run([
+            f"{gffcompare}",
+            "--strict-match",
+            "-e 0",
+            "-T",
+            "-o",
+            str(cache_dir) + ("/" if not str(cache_dir).endswith("/") else ""),
+            "-r",
+            str(reference),
+            str(annotation[i]),
+        ], check=True)
 
-    results = {}
-    pattern = re.compile(r'^\s*(.+?) level:\s+([\d.]+)\s+\|\s+([\d.]+)')
+        results.append({})
+        pattern = re.compile(r'^\s*(.+?) level:\s+([\d.]+)\s+\|\s+([\d.]+)')
 
-    with open(cache_dir / ".stats", 'r', encoding='utf-8') as file:
-        for line in file:
-            match = pattern.match(line)
-            if match:
-                level = match.group(1).strip().lower().replace(" ", "_")
-                sensitivity = float(match.group(2))
-                precision = float(match.group(3))
-                results[level] = {
-                    'sensitivity': sensitivity / 100,
-                    'precision': precision / 100,
-                }
+        with open(cache_dir / ".stats", 'r', encoding='utf-8') as file:
+            for line in file.readlines():
+                match = pattern.match(line)
+                if match:
+                    level = match.group(1).strip().lower().replace(" ", "_")
+                    sensitivity = float(match.group(2))
+                    precision = float(match.group(3))
+                    results[-1][level] = {
+                        'sensitivity': sensitivity / 100,
+                        'precision': precision / 100,
+                    }
 
     generated += [".annotated.gtf", ".loci", ".stats", ".tracking"]
 
@@ -120,7 +150,10 @@ def compare_gtf(
         cache_dir.rmdir()
 
     try:
-        return AnnotationComparison(**results)
+        if seq_given:
+            return [AnnotationComparison(**result) for result in results]
+        else:
+            return AnnotationComparison(**results[0])
     except ValidationError:
         return AnnotationComparison(
             base=CompareMetrics(sensitivity=0, precision=0),

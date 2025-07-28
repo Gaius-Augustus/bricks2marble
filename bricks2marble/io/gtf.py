@@ -1,7 +1,7 @@
 import csv
 from pathlib import Path
 
-from ..struct import Annotation, FeatureType, GTFEntry
+from ..struct import Annotation, GTFEntry
 
 
 def load_gtf(
@@ -16,16 +16,8 @@ def load_gtf(
             line = [l.strip(" ") for l in line_]
             if line[0].startswith("#"):
                 continue
-
             entry = GTFEntry.from_list(line)
-            if entry.feature == FeatureType.Gene:
-                annotation.add(gene_id=entry.attribute("gene_id"))
-            else:
-                transcript_id = entry.attribute("transcript_id")
-                gene_id = entry.attribute("gene_id")
-                annotation.add(
-                    entry=entry,
-                    gene_id=gene_id,
-                    transcript_id=transcript_id,
-                )
+            entry.start -= 1
+            annotation.add(entry)
+
         return annotation

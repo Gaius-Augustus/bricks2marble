@@ -189,23 +189,18 @@ def _annotation_from_dict(
             g_id = f"g{tx_id}"
             phase = 0
             for r in tx:
-                annotation.add(
-                    GTFEntry(
-                        name=seq,
-                        source=model_name,
-                        feature=FeatureType(r.name),
-                        start=r.start,
-                        end=r.end,
-                        score=None,
-                        strand="+" if fwd else "-",
-                        frame=phase,  # type: ignore
-                        attributes=f"gene_id \"{g_id}\"; "
-                                   f"transcript_id \"{t_id}\";",
-                    ),
-                    gene_id=g_id,
+                annotation.add(GTFEntry(
+                    name=seq,
+                    source=model_name,
+                    feature=FeatureType(r.name),
+                    start=r.start,
+                    end=r.end,
+                    score=None,
                     strand="+" if fwd else "-",
-                    transcript_id=t_id,
-                )
+                    frame=phase,  # type: ignore
+                    attributes=f"gene_id \"{g_id}\"; "
+                                f"transcript_id \"{t_id}\";",
+                ))
                 if r.name == "CDS":
                     phase = (3 - (r.end - r.start - phase) % 3) % 3
             len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])

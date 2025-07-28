@@ -273,8 +273,7 @@ class FASTA:
     :meth:`bricks2marble.load_fasta`.
 
     Args:
-        sequences (list[Sequence]): An list of :class:`Sequence`
-            objects.
+        sequences (list[Sequence]): A list of :class:`Sequence` objects.
     """
 
     def __init__(self, sequences: list[Sequence]) -> None:
