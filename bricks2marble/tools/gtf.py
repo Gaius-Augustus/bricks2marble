@@ -23,6 +23,15 @@ class CompareMetrics(BaseModel):
     missed: float | None = None
     novel: float | None = None
 
+    @property
+    def F1(self) -> float:
+        if self.precision == 0 or self.sensitivity == 0:
+            return 0
+        return (
+            2 * self.precision * self.sensitivity
+            / (self.precision + self.sensitivity)
+        )
+
 
 class AnnotationComparison(BaseModel):
 
