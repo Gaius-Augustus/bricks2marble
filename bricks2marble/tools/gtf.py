@@ -20,6 +20,9 @@ class CompareMetrics(BaseModel):
     sensitivity: float
     precision: float
 
+    missed: float | None = None
+    novel: float | None = None
+
 
 class AnnotationComparison(BaseModel):
 
@@ -125,21 +128,34 @@ def compare_gtf(
             "-r",
             str(reference),
             str(annotation[i]),
-        ], check=True)
+        ], check=True, stderr=subprocess.DEVNULL)
+
+        pattern = re.compile(r'^\s*(.+?) level:\s+([\d.]+)\s+\|\s+([\d.]+)')
+        pattern_mn = re.compile(
+            r'^\s*(Missed|Novel) (.+?):[\s/\d.]+\(\s*([\d.]+)%\)'
+        )
 
         results.append({})
-        pattern = re.compile(r'^\s*(.+?) level:\s+([\d.]+)\s+\|\s+([\d.]+)')
-
         with open(cache_dir / ".stats", 'r', encoding='utf-8') as file:
             for line in file.readlines():
                 match = pattern.match(line)
-                if match:
+                match_mn = pattern_mn.match(line)
+                if match is not None:
                     level = match.group(1).strip().lower().replace(" ", "_")
                     sensitivity = float(match.group(2))
                     precision = float(match.group(3))
                     results[-1][level] = {
                         'sensitivity': sensitivity / 100,
                         'precision': precision / 100,
+                    }
+                if match_mn is not None:
+                    level = match_mn.group(2).strip()[:-1]
+                    print(level)
+                    if level == "loc": level = "locus"
+                    mn = match_mn.group(1).lower()
+                    perc = float(match_mn.group(3))
+                    results[-1][level] = results[-1][level] | {
+                        mn: round(perc / 100, 3),
                     }
 
     generated += [".annotated.gtf", ".loci", ".stats", ".tracking"]
@@ -171,7 +187,7 @@ def plot_comparison(
     zoom: bool = False,
 ) -> go.Figure:
     fig = make_subplots(
-        rows=2,
+        rows=3,
         cols=3,
         subplot_titles=[
             "Base",
@@ -180,6 +196,12 @@ def plot_comparison(
             "Exon",
             "Intron-Chain",
             "Locus",
+            "Percentage of novel and missing features",
+        ],
+        specs=[
+            [{'type': 'scatter'}, {'type': 'scatter'}, {'type': 'scatter'}],
+            [{'type': 'scatter'}, {'type': 'scatter'}, {'type': 'scatter'}],
+            [{'type': 'bar', 'colspan': 3}, None, None],
         ],
         horizontal_spacing=0.05,
         vertical_spacing=0.1,
@@ -203,6 +225,18 @@ def plot_comparison(
                 showlegend=j==0,
                 legendgroup=f"group {i}",
             ), row=row, col=col)
+            missed = getattr(getattr(metric, key), "missed", None)
+            novel = getattr(getattr(metric, key), "novel", None)
+            if missed is not None and novel is not None:
+                fig.add_trace(go.Bar(
+                    x=[key, key],
+                    y=[-missed, novel],
+                    name=f"Model {i+1}" if labels is None else labels[i],
+                    marker_color=colors[i],
+                    showlegend=False,
+                    legendgroup=f"group {i}",
+                ), row=3, col=1)
+
 
     for j, key in enumerate(keys):
         row = j // 3 + 1
@@ -242,11 +276,42 @@ def plot_comparison(
             textangle=-90,
             xanchor="left", yanchor="top",
         )
+    fig.add_annotation(
+        text="Novel",
+        xref="paper", yref="y7",
+        x=0.05, y=0.5,
+        showarrow=False,
+        font=dict(size=14),
+        opacity=0.5,
+        textangle=-90,
+        xanchor="left", yanchor="middle",
+    )
+    fig.add_annotation(
+        text="Missed",
+        xref="paper", yref="y7",
+        x=0.05, y=-0.5,
+        showarrow=False,
+        font=dict(size=14),
+        opacity=0.5,
+        textangle=-90,
+        xanchor="left", yanchor="middle",
+    )
 
     fig.update_layout(
         width=1000,
-        height=600,
+        height=900,
         margin=dict(l=30, r=0, t=30, b=30),
         title=dict(xref="container", yref="container", yanchor="bottom"),
+        xaxis7=dict(domain=[0.05, 0.95]),
+        yaxis7=dict(
+            tickmode='array',
+            tickvals=(
+                [-i/10 for i in range(1, 11)] + [i/10 for i in range(1, 11)]
+            ),
+            ticktext=[str(i/10) for i in range(1, 11)],
+            zeroline=True,
+            zerolinewidth=2,
+            zerolinecolor='black',
+        ),
     )
     return fig

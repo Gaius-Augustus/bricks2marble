@@ -1,3 +1,4 @@
+import warnings
 from timeit import default_timer
 from typing import Callable, Literal
 
@@ -6,21 +7,21 @@ import numpy as np
 from ..struct import FASTA, Annotation, FeatureType, GTFEntry, Region, Sequence
 
 HMM_STATE_AGGREGATION = np.array([
-    [1., 0., 0., 0., 0.],
-    [0., 1., 0., 0., 0.],
-    [0., 1., 0., 0., 0.],
-    [0., 1., 0., 0., 0.],
-    [0., 0., 1., 0., 0.],
-    [0., 0., 0., 1., 0.],
-    [0., 0., 0., 0., 1.],
-    [0., 0., 1., 0., 0.],
-    [0., 0., 0., 1., 0.],
-    [0., 0., 0., 0., 1.],
-    [0., 0., 1., 0., 0.],
-    [0., 0., 0., 0., 1.],
-    [0., 0., 1., 0., 0.],
-    [0., 0., 0., 1., 0.],
-    [0., 0., 0., 0., 1.],
+    [1., 0., 0., 0., 0.],  # IR
+    [0., 1., 0., 0., 0.],  # I0
+    [0., 1., 0., 0., 0.],  # I1
+    [0., 1., 0., 0., 0.],  # I2
+    [0., 0., 1., 0., 0.],  # E0
+    [0., 0., 0., 1., 0.],  # E1
+    [0., 0., 0., 0., 1.],  # E2
+    [0., 0., 1., 0., 0.],  # Start
+    [0., 0., 0., 1., 0.],  # EI0
+    [0., 0., 0., 0., 1.],  # EI1
+    [0., 0., 1., 0., 0.],  # EI2
+    [0., 0., 0., 0., 1.],  # IE0
+    [0., 0., 1., 0., 0.],  # IE1
+    [0., 0., 0., 1., 0.],  # IE2
+    [0., 0., 0., 0., 1.],  # Stop
 ])
 
 
@@ -439,7 +440,15 @@ def _GTF_from_model_conservative(
     return annotation
 
 
-def _first_matching_bases_surgery(
+def _prediction_mismatch(left: int, right: int) -> bool:
+    if left == right in [0, 1, 2, 3]:
+        return False
+    if (4 < left + 1 == right <= 6) or (left == 6 and right == 4):
+        return False
+    return True
+
+
+def _merge_replace_center(
     left: np.ndarray,
     right: np.ndarray,
     center: np.ndarray,
@@ -447,10 +456,15 @@ def _first_matching_bases_surgery(
     T_half = left.shape[0] // 2
     left_match = np.where((left[T_half:] - center[:T_half])[::-1] == 0)[0]
     right_match = np.where((center[T_half:] - right[:T_half]) == 0)[0]
-    l = left_match[0] if left_match.size > 0 else 0
-    r = right_match[0] if right_match.size > 0 else T_half
-    left[T_half+l:] = center[:T_half-l]
-    right[:r] = center[T_half:T_half+r]
+    if left_match.size == 0 or right_match.size == 0:
+        warnings.warn(
+            "Unable to merge reprediction. Annotation is probably incorrect.",
+            RuntimeWarning,
+        )
+    if left_match.size > 0 and (l := left_match[0]) > 0:
+        left[-l:] = center[T_half-l:T_half]
+    if right_match.size > 0 and (r := right_match[0]) > 0:
+        right[:r] = center[T_half:T_half+r]
     return left, right
 
 
@@ -487,12 +501,12 @@ def _GTF_from_model_liberal(
         if (fasta.segments[i].name == fasta.segments[i+1].name):
             fwd = bwd = False
 
-            if labels_fwd is not None and (
-                labels_fwd[i, -1] != labels_fwd[i+1, 0]
+            if labels_fwd is not None and _prediction_mismatch(
+                labels_fwd[i, -1], labels_fwd[i+1, 0],
             ):
                 fwd = True
-            if labels_bwd is not None and (
-                labels_bwd[i, -1] != labels_bwd[i+1, 0]
+            if labels_bwd is not None and _prediction_mismatch(
+                labels_bwd[i, -1], labels_bwd[i+1, 0],
             ):
                 bwd = True
 
@@ -506,8 +520,8 @@ def _GTF_from_model_liberal(
                         axis=0,
                     ),
                     name=fasta.segments[i].name,
-                    start=fasta.segments[i].start,
-                    end=fasta.segments[i+1].end,
+                    start=fasta.segments[i].start+T_half,
+                    end=fasta.segments[i+1].end-T_half,
                 ))
                 repred_index.append(i)
                 if fwd and bwd:
@@ -531,18 +545,28 @@ def _GTF_from_model_liberal(
     )
 
     for i in range(fasta.N):
-        if len(repred_index) > 0 and i == repred_index[0]:
+        if len(repred_index) == 0:
+            break
+        if i == repred_index[0]:
             strand = repred_strand.pop(0)
             if strand == 0 or strand == 2:
-                labels_fwd[i], labels_fwd[i+1] = _first_matching_bases_surgery(
-                    labels_fwd[i], labels_fwd[i+1], repred_fwd[0],
+                labels_fwd[i], labels_fwd[i+1] = (  # type: ignore
+                    _merge_replace_center(
+                        labels_fwd[i],  # type: ignore
+                        labels_fwd[i+1],  # type: ignore
+                        repred_fwd[0],  # type: ignore
+                    )
                 )
-                repred_fwd = repred_fwd[1:]
+                repred_fwd = repred_fwd[1:]  # type: ignore
             if strand == 1 or strand == 2:
-                labels_bwd[i], labels_bwd[i+1] = _first_matching_bases_surgery(
-                    labels_bwd[i], labels_bwd[i+1], repred_bwd[0],
+                labels_bwd[i], labels_bwd[i+1] = (  # type: ignore
+                    _merge_replace_center(
+                        labels_bwd[i],  # type: ignore
+                        labels_bwd[i+1],  # type: ignore
+                        repred_bwd[0],  # type: ignore
+                    )
                 )
-                repred_bwd = repred_bwd[1:]
+                repred_bwd = repred_bwd[1:]  # type: ignore
             repred_index.pop(0)
 
     if verbose: print(
@@ -557,29 +581,47 @@ def _GTF_from_model_liberal(
     i = 0
     while i < fasta.N:
         name = fasta.segments[i].name
+        start = fasta.segments[i].start
         while name == fasta.segments[i].name:
-            current_fwd.append(labels_fwd[i])
-            current_bwd.append(labels_bwd[i])
+            if labels_fwd is not None:
+                current_fwd.append(labels_fwd[i])
+            if labels_bwd is not None:
+                current_bwd.append(labels_bwd[i])
             i += 1
             if i == fasta.N:
                 break
 
-        if name not in entries_fwd:
-            entries_fwd[name] = []
-        if name not in entries_bwd:
-            entries_bwd[name] = []
+        if len(current_fwd) > 0:
+            regions = _split_regions(
+                np.concatenate(current_fwd, axis=0),
+                offset=start,
+                strand="+",
+            )
+            _, txs, last = _transcripts_from_regions(
+                regions,
+                seperate_first=False,
+            )
+            if name not in entries_fwd:
+                entries_fwd[name] = []
+            if len(last) > 0:
+                entries_fwd[name] += [last]
+            entries_fwd[name] += txs
 
-        regions = _split_regions(np.r_[*current_fwd], strand="+")
-        _, txs, last = _transcripts_from_regions(regions, seperate_first=False)
-        if len(last) > 0:
-            entries_fwd[name] += [last]
-        entries_fwd[name] += txs
-
-        regions = _split_regions(np.r_[*current_bwd], strand="-")
-        _, txs, last = _transcripts_from_regions(regions, seperate_first=False)
-        if len(last) > 0:
-            entries_bwd[name] += [last]
-        entries_bwd[name] += txs
+        if len(current_bwd) > 0:
+            regions = _split_regions(
+                np.concatenate(current_bwd, axis=0),
+                offset=start,
+                strand="-",
+            )
+            _, txs, last = _transcripts_from_regions(
+                regions,
+                seperate_first=False,
+            )
+            if name not in entries_bwd:
+                entries_bwd[name] = []
+            if len(last) > 0:
+                entries_bwd[name] += [last]
+            entries_bwd[name] += txs
 
         current_fwd = []
         current_bwd = []
