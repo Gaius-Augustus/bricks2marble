@@ -150,7 +150,6 @@ def compare_gtf(
                     }
                 if match_mn is not None:
                     level = match_mn.group(2).strip()[:-1]
-                    print(level)
                     if level == "loc": level = "locus"
                     mn = match_mn.group(1).lower()
                     perc = float(match_mn.group(3))
