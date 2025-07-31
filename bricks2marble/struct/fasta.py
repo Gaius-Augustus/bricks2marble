@@ -248,6 +248,17 @@ class Sequence:
             probs[token] += (self.nuc == index).sum() / size
         return probs
 
+    def string(self) -> str:
+        """Returns the string representation of this sequence as one
+        long seqeunce of nucleotides.
+        """
+        translation_table = bytes.maketrans(
+            bytes([0, 1, 2, 3, 4, 5, 6, 7, 8]),
+            b"ACGTNacgt",
+        )
+        translated = self.flat.tobytes().translate(translation_table)
+        return translated.decode("utf-8")
+
     def copy(self) -> "Sequence":
         return Sequence(
             self._sequence,
