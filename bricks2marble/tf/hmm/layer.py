@@ -1,8 +1,8 @@
 import tensorflow as tf
+from hidten.config import ModelConfig, with_config
 from hidten.tf import TFHMM, TFCategoricalEmitter
 
-from ..config import ModelConfig, with_config
-from ..util import UncertainPredictionRegularizer
+from ..loss import UncertainPredictionRegularizer
 from .tools import (get_nuc_emission_distribution, left_right_3mers,
                     state_start_dist, state_transitions)
 
@@ -37,9 +37,10 @@ class AnnotationHMMConfig(ModelConfig):
 @with_config(AnnotationHMMConfig)
 class AnnotationHMM(tf.keras.Layer):
 
-    config: AnnotationHMMConfig
+    def __init__(self, **kwargs) -> None:
+        super().__init__()
+        self.config = AnnotationHMMConfig(**kwargs)
 
-    def post_config_init(self) -> None:
         self.hmm = TFHMM(
             states=self.config.n_states,
             heads=self.config.heads,
@@ -96,8 +97,6 @@ class AnnotationHMM(tf.keras.Layer):
                 class_index=0,
             )
 
-        super().__init__()
-
     def build(self, input_shape: tuple[int | None, ...]) -> None:
         self.hmm.build((
             input_shape,
@@ -105,7 +104,7 @@ class AnnotationHMM(tf.keras.Layer):
             input_shape[:-1] + (65, ),
         ))
 
-    def prepare_input(
+    def preprocess(
         self,
         x: tf.Tensor,
         nuc: tf.Tensor,
@@ -122,108 +121,34 @@ class AnnotationHMM(tf.keras.Layer):
             x = tf.reshape(x, (2*B, T, -1))
         return x, nuc
 
-    def call(self, x: tf.Tensor, nuc: tf.Tensor) -> tf.Tensor:
-        x, nuc = self.prepare_input(x, nuc)
-        nuc_left, nuc_right = left_right_3mers(nuc)  # type: ignore
-
-        x = self.hmm.posterior(x, nuc_left, nuc_right)
-
+    def postprocess(self, x: tf.Tensor) -> tf.Tensor:
         if self.config.use_reverse_strand:
-            # 2*B, T, H, D
+            # 2*B, T, H(, D)
             x = tf.reshape(x, tf.concat((
                 (2, ),
                 (tf.shape(x)[0]//2, ),  # type: ignore
                 tf.shape(x)[1:]  # type: ignore
             ), 0))
-            # 2, B, T, H, D
+            # 2, B, T, H(, D)
             x = tf.concat(
-                (x[0:1], tf.reverse(x[1:2], [-3])  # type: ignore
+                (x[0:1], tf.reverse(x[1:2], [2])  # type: ignore
             ), 0)
-            x = tf.transpose(x, [1, 2, 0, 3, 4])
-            # B, T, 2, H, D
+            x = tf.keras.ops.moveaxis(x, 0, 2)  # type: ignore
+            # B, T, 2, H(, D)
             x = tf.reshape(x, tf.concat((
                 tf.shape(x)[:2],  # type: ignore
                 (tf.shape(x)[2]*tf.shape(x)[3], ),  # type: ignore
                 tf.shape(x)[4:],  # type: ignore
             ), 0))
-            # B, T, 2*H, D
-
-        if self.config.nudge_IR > 0:
-            self.regularizer(tf.nn.softmax(x, axis=-1))
+            # B, T, 2*H(, D)
         return x
 
-    def viterbi(
-        self,
-        x: tf.Tensor,
-        nuc: tf.Tensor,
-    ) -> tf.Tensor:
-        self.cell.recurrent_init()
-        x, nuc = self.prepare_input(x, nuc)
-
-        x = self.hmm.viterbi(x, nuc)
-        x = tf.transpose(x, [1, 2, 0])
-
-        if self.config.use_reverse_strand:
-            # 2*B, T, H
-            x = tf.reshape(x, tf.concat((
-                (2, ),
-                (tf.shape(x)[0]//2, ),  # type: ignore
-                tf.shape(x)[1:]  # type: ignore
-            ), 0))
-            # 2, B, T, H
-            x = tf.concat(
-                (x[0:1], tf.reverse(x[1:2], [-2])  # type: ignore
-            ), 0)
-            x = tf.transpose(x, [1, 2, 0, 3])
-            # B, T, 2, H
-            x = tf.reshape(x, tf.concat((
-                tf.shape(x)[:2],  # type: ignore
-                (tf.shape(x)[2]*tf.shape(x)[3], ),  # type: ignore
-            ), 0))
-            # B, T, 2*H
-
-        return x
-
-    def mea(
-        self,
-        x: tf.Tensor,
-        nuc: tf.Tensor,
-        training: bool = False,
-        use_loglik: bool = True,
-    ) -> tf.Tensor:
-        x = self.prepare_input(x, nuc)
-        log_post = self.state_posterior_log_probs(
-            x,
-            training=training,
-            no_loglik=not use_loglik,
-        )
-        post = tf.nn.softmax(log_post, axis=-1)
-        # H, 2*B, T, D
-        x = maximum_expected_accuracy(
-            post,
-            self.cell,
-            parallel_factor=self.parallel_factor,
-        )
-        # H, 2*B, T
-        x = tf.transpose(x, [1, 2, 0])
-        # 2*B, T, H
-        if self.config.use_reverse_strand:
-            x = tf.reshape(x, tf.concat((
-                (2, ),
-                (tf.shape(x)[0]//2, ),  # type: ignore
-                tf.shape(x)[1:]  # type: ignore
-            ), 0))
-            # 2, B, T, H
-            x = tf.concat(
-                (x[0:1], tf.reverse(x[1:2], [-2])  # type: ignore
-            ), 0)
-            x = tf.transpose(x, [1, 2, 0, 3])
-            # B, T, 2, H
-            x = tf.reshape(x, tf.concat((
-                tf.shape(x)[:2],  # type: ignore
-                (tf.shape(x)[2]*tf.shape(x)[3], ),  # type: ignore
-            ), 0))
-            # B, T, 2*H
+    def call(self, x: tf.Tensor, nuc: tf.Tensor) -> tf.Tensor:
+        x, nuc = self.preprocess(x, nuc)
+        nuc_left, nuc_right = left_right_3mers(nuc)  # type: ignore
+        x = self.hmm(x, nuc_left, nuc_right)  # type: ignore
+        x = self.postprocess(x)
+        if self.config.nudge_IR > 0: self.regularizer(x)
         return x
 
     def compute_output_shape(
