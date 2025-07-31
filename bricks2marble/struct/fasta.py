@@ -18,6 +18,17 @@ ENCODING = np.array([
     [0, 0, 1, 0, 0, 1],
     [0, 0, 0, 1, 0, 1],
 ])
+ENCODING_EXPANDED_REPEATS = np.array([
+    [1, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 1, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 1, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 1, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 1, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 1],
+])
 
 
 class Segment(BaseModel):
@@ -147,6 +158,7 @@ class Sequence:
         self,
         sequences: np.ndarray | None = None,
         pad_index: int = 4,
+        expand_repeats: bool = False,
     ) -> np.ndarray:
         """Returns a one-hot encoded version of :meth:`Sequence.nuc` of
         shape ``(N, T, 6)``.
@@ -157,9 +169,16 @@ class Sequence:
             pad_index (int, optional): What to replace the padding
                 character (-1) by before encoding. Default to 4, which
                 is an `N`.
+            expand_repeats (bool, optional): If set to True, also
+                one-hot encodes repeat-masked positions and instead
+                returns an array of shape ``(N, T, 9)``. The default is
+                that repeat-masked positions are indicated as a flag in
+                the last dimension.
         """
         nuc = self.nuc if sequences is None else sequences
         nuc[nuc == -1] = pad_index
+        if expand_repeats:
+            return ENCODING_EXPANDED_REPEATS[nuc]
         return ENCODING[nuc]
 
     def resample(self, T: int, drop_remainder: bool = False) -> "Sequence":
@@ -338,6 +357,7 @@ class FASTA:
         self,
         sequences: np.ndarray | None = None,
         pad_index: int = 4,
+        expand_repeats: bool = False,
     ) -> np.ndarray:
         """Returns a one-hot encoded version of :meth:`FASTA.nuc` of
         shape ``(N, T, 6)``.
@@ -348,9 +368,16 @@ class FASTA:
             pad_index (int, optional): What to replace the padding
                 character (-1) by before encoding. Default to 4, which
                 is an `N`.
+            expand_repeats (bool, optional): If set to True, also
+                one-hot encodes repeat-masked positions and instead
+                returns an array of shape ``(N, T, 9)``. The default is
+                that repeat-masked positions are indicated as a flag in
+                the last dimension.
         """
         nuc = self.nuc if sequences is None else sequences
         nuc[nuc == -1] = pad_index
+        if expand_repeats:
+            return ENCODING_EXPANDED_REPEATS[nuc]
         return ENCODING[nuc]
 
     def occurences(
