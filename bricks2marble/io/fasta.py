@@ -44,17 +44,24 @@ def load_fasta(
             current_sequence += line.strip()
     raw_sequences.append(current_sequence.encode())
 
-    translation_table = bytes.maketrans(
+    table = bytearray([4]*256)
+    mappings = {a: b for a, b in zip(
         b"ACGTNnacgt",
-        bytes([0, 1, 2, 3, 4, 4, 5, 6, 7, 8]),
-    )
-    sequences = []
-    for seq, name in zip(raw_sequences, name_sequences):
-        translated = seq.translate(translation_table)
-        sequences.append(Sequence(
-            np.frombuffer(translated, dtype=np.int8)[np.newaxis, :],
+        [0, 1, 2, 3, 4, 4, 5, 6, 7, 8],
+    )}
+    for k, v in mappings.items():
+        table[k] = v
+    translation_table = bytes(table)
+
+    sequences = [
+        Sequence(
+            np.frombuffer(
+                seq.translate(translation_table),
+                dtype=np.int8,
+            )[np.newaxis, :],
             name=name,
-        ))
+        ) for seq, name in zip(raw_sequences, name_sequences)
+    ]
     fasta = FASTA(sequences)
     if T is not None:
         fasta.resample(T, drop_remainder=drop_remainder)
