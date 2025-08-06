@@ -440,10 +440,20 @@ def _GTF_from_model_conservative(
     return annotation
 
 
-def _prediction_mismatch(left: int, right: int) -> bool:
-    if left == right in [0, 1, 2, 3]:
-        return False
-    if (4 < left + 1 == right <= 6) or (left == 6 and right == 4):
+def _reprediction_required(
+    left: np.ndarray,
+    right: np.ndarray,
+    exon_at_boundary: int | None = None,
+) -> bool:
+    if exon_at_boundary is not None:
+        left_bound = left[-exon_at_boundary:]
+        if 4 in left_bound or 5 in left_bound or 6 in left_bound:
+            return True
+        right_bound = right[:exon_at_boundary]
+        if 4 in right_bound or 5 in right_bound or 6 in right_bound:
+            return True
+
+    if left[-1] == right[0] in [0, 1, 2, 3]:
         return False
     return True
 
@@ -475,6 +485,7 @@ def _GTF_from_model_liberal(
         | tuple[np.ndarray | None, np.ndarray]
         | tuple[np.ndarray, np.ndarray],
     ],
+    exon_at_boundary: int | None = None,
     model_name: str = "Model",
     verbose: bool = True,
 ) -> Annotation:
@@ -501,12 +512,14 @@ def _GTF_from_model_liberal(
         if (fasta.segments[i].name == fasta.segments[i+1].name):
             fwd = bwd = False
 
-            if labels_fwd is not None and _prediction_mismatch(
-                labels_fwd[i, -1], labels_fwd[i+1, 0],
+            if labels_fwd is not None and _reprediction_required(
+                labels_fwd[i, :], labels_fwd[i+1, :],
+                exon_at_boundary=exon_at_boundary,
             ):
                 fwd = True
-            if labels_bwd is not None and _prediction_mismatch(
-                labels_bwd[i, -1], labels_bwd[i+1, 0],
+            if labels_bwd is not None and _reprediction_required(
+                labels_bwd[i, :], labels_bwd[i+1, :],
+                exon_at_boundary=exon_at_boundary,
             ):
                 bwd = True
 
@@ -658,6 +671,7 @@ def GTF_from_model(
     ],
     model_name: str = "Model",
     verbose: bool = True,
+    repredict_exon_at_boundary: int | None = None,
     liberal: bool = False,
 ) -> Annotation:
     """Generate a genome annotation using a nucleotide sequence and a
@@ -679,6 +693,11 @@ def GTF_from_model(
             GTF file.
         verbose (bool, optional): Toogle verbosity of the function.
             Defaults to False.
+        repredict_exon_at_boundary (int, optional): If the model
+            predicts an exon within ``k`` positions left and right of
+            a break point, a reprediction will be made. This works only
+            if ``liberal=True``. Here, ``k`` is the given number for
+            this argument. Defaults to no additional checks for exons.
         liberal (bool, optional): Can be used to switch between two
             annotation functions: "conservative" or "liberal". The
             former is based on a more strict search for transcripts, the
@@ -693,6 +712,7 @@ def GTF_from_model(
             fasta,
             predict_func=predict_func,
             model_name=model_name,
+            exon_at_boundary=repredict_exon_at_boundary,
             verbose=verbose,
         )
     return _GTF_from_model_conservative(
