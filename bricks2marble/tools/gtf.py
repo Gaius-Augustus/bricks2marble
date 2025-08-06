@@ -113,17 +113,13 @@ def compare_gtf(
     cache_dir = Path.cwd() / f"_cache_{random_id}/"
     cache_dir.mkdir(exist_ok=True)
 
-    generated: list[str] = []
-
     for i in range(len(annotation)):
         if isinstance(annotation[i], Annotation):
             annotation[i].to_gtf(cache_dir / f"annotation_{i}.gtf")
             annotation[i] = cache_dir / f"annotation_{i}.gtf"
-            generated.append(str(annotation[i]))
     if isinstance(reference, Annotation):
         reference.to_gtf(cache_dir / "reference.gtf")
         reference = cache_dir / "reference.gtf"
-        generated.append(str(reference))
 
     results = []
     for i in range(len(annotation)):
@@ -139,7 +135,9 @@ def compare_gtf(
             str(annotation[i]),
         ], check=True, stderr=subprocess.DEVNULL)
 
-        pattern = re.compile(r'^\s*(.+?) level:\s+([\d.]+)\s+\|\s+([\d.]+)')
+        pattern = re.compile(
+            r'^\s*(.+?) level:\s+([\d.]+|-nan)\s+\|\s+([\d.]+|-nan)'
+        )
         pattern_mn = re.compile(
             r'^\s*(Missed|Novel) (.+?):[\s/\d.]+\(\s*([\d.]+)%\)'
         )
@@ -152,7 +150,10 @@ def compare_gtf(
                 if match is not None:
                     level = match.group(1).strip().lower().replace(" ", "_")
                     sensitivity = float(match.group(2))
-                    precision = float(match.group(3))
+                    if match.group(3) == "-nan":
+                        precision = 0
+                    else:
+                        precision = float(match.group(3))
                     results[-1][level] = {
                         'sensitivity': sensitivity / 100,
                         'precision': precision / 100,
@@ -166,9 +167,7 @@ def compare_gtf(
                         mn: round(perc / 100, 3),
                     }
 
-    generated += [".annotated.gtf", ".loci", ".stats", ".tracking"]
-
-    for name in generated:
+    for name in cache_dir.iterdir():
         (cache_dir / name).unlink()
     if not any(cache_dir.iterdir()):
         cache_dir.rmdir()
@@ -193,6 +192,7 @@ def plot_comparison(
     metrics: Sequence[AnnotationComparison],
     labels: Sequence[str] | None = None,
     zoom: bool = False,
+    flip_axes: bool = False,
 ) -> go.Figure:
     fig = make_subplots(
         rows=3,
@@ -224,9 +224,15 @@ def plot_comparison(
         for j, key in enumerate(keys):
             row = j // 3 + 1
             col = j % 3 + 1
+            x, y = (
+                getattr(metric, key).sensitivity,
+                getattr(metric, key).precision,
+            )
+            if flip_axes:
+                x, y = y, x
             fig.add_trace(go.Scatter(
-                x=[getattr(metric, key).sensitivity],
-                y=[getattr(metric, key).precision],
+                x=[x],
+                y=[y],
                 name=f"Model {i+1}" if labels is None else labels[i],
                 marker_symbol=raw_symbols[i%10],
                 marker_color=colors[i],
@@ -266,7 +272,7 @@ def plot_comparison(
         )
 
         fig.add_annotation(
-            text="Sensitivity",
+            text="Sensitivity" if not flip_axes else "Precision",
             xref=f"x{j+1}", yref=f"y{j+1}",
             x=1.0, y=0,
             showarrow=False,
@@ -275,7 +281,7 @@ def plot_comparison(
             xanchor="right", yanchor="bottom",
         )
         fig.add_annotation(
-            text="Precision",
+            text="Precision" if not flip_axes else "Sensitivity",
             xref=f"x{j+1}", yref=f"y{j+1}",
             x=0, y=1.0,
             showarrow=False,
