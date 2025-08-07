@@ -1,8 +1,8 @@
 import csv
-from pathlib import Path
-from typing import Literal
 from collections import OrderedDict
 from collections.abc import Iterator
+from pathlib import Path
+from typing import Callable
 
 from .transcript import FeatureType, GTFEntry, Transcript
 
@@ -10,39 +10,57 @@ from .transcript import FeatureType, GTFEntry, Transcript
 class Gene:
     """Class representing a gene containing multiple transcripts."""
 
-    def __init__(self, id: str, strand: Literal["+", "-"] = "+") -> None:
+    def __init__(self, id: str) -> None:
         self.id = id
-        self.strand: Literal["+", "-"] = strand
         self.start = -1
         self.end = -1
         self._transcripts: OrderedDict[str, Transcript] = OrderedDict()
 
+    def add(self, entry: GTFEntry) -> None:
+        """Adds a gtf entry to this gene by adding it to one of the
+        contained transcripts.
+
+        Args:
+            entry (GTFEntry): The entry that should be added to the
+                gene. Can be of any :class:`FeatureType`.
+
+                *Warning*: The ``start`` and ``end`` attribute of the
+                entry has to align with Python indexing, starting at
+                zero and the end is exclusive.
+        """
+        if entry.feature == FeatureType.Gene:
+            return
+
+        t_id = entry.attribute("transcript_id")
+        if t_id not in self._transcripts:
+            self._transcripts[t_id] = Transcript(t_id)
+
+        self._transcripts[t_id].add(entry)
+
+        if (self.start < 0 or self._transcripts[t_id].start < self.start):
+            self.start = self._transcripts[t_id].start
+        if self.end < 0 or self._transcripts[t_id].end > self.end:
+            self.end = self._transcripts[t_id].end
+
+    def rename(self, name: str | Callable[[str], str]) -> None:
+        """Changes the name of the sequence this gene is located in by
+        changing the names in all transcripts of this gene.
+
+        Args:
+            name (str | callable): If a string is given, changes all
+                sequence names to that string. If a callable is given,
+                this callable is applied to the sequence names, which
+                are then set to the returned string.
+        """
+        for key in self._transcripts:
+            self._transcripts[key].rename(name)
+
     def finalize(self) -> None:
         """Add to all Transcript objects transcript, intron, CDS, exon
-        coordinates if they were not included in the gtf file. Delete
-        all transripts that have no exons or CDS.
+        coordinates if they were not included in the gtf file.
         """
-        tx_no_cds = []
         for k in self._transcripts:
-            if not self._transcripts[k].finalize():
-                tx_no_cds.append(k)
-        for k in tx_no_cds:
-            del self._transcripts[k]
-
-    def add(self, entry: GTFEntry, transcript_id: str) -> None:
-        if transcript_id not in self._transcripts:
-            self._transcripts[transcript_id] = Transcript(
-                transcript_id,
-                gene_id=self.id,
-                seqname=entry.name,
-                strand=self.strand,
-            )
-        self._transcripts[transcript_id].add(entry)
-        if (self.start < 0
-                or self._transcripts[transcript_id].start < self.start):
-            self.start = self._transcripts[transcript_id].start
-        if self.end < 0 or self._transcripts[transcript_id].end > self.end:
-            self.end = self._transcripts[transcript_id].end
+            self._transcripts[k].finalize()
 
     def to_list(self) -> list[GTFEntry]:
         if len(self._transcripts) == 0:
@@ -60,7 +78,7 @@ class Gene:
             start=self.start+1,
             end=self.end,
             score=None,
-            strand=self.strand,
+            strand=gtf[-1].strand,
             frame=None,
             attributes=f"gene_id \"{self.id}\";",
         ))
@@ -68,6 +86,9 @@ class Gene:
 
     def __iter__(self) -> Iterator[Transcript]:
         return iter(list(self._transcripts.values()))
+
+    def __getitem__(self, key: str) -> Transcript:
+        return self._transcripts[key]
 
 
 class Annotation:
@@ -79,33 +100,33 @@ class Annotation:
         self._genes: OrderedDict[str, Gene] = OrderedDict()
         self._iter_index = -1
 
-    def add(
-        self,
-        entry: GTFEntry | None = None,
-        gene_id: str | None = None,
-        strand: Literal["+", "-"] = "+",
-        transcript_id: str | None = None,
-    ) -> None:
-        """Adds the given entry to the gene with reported gene and
-        transcript ID. If only the gene ID is given, instead creates a
-        new gene.
+    def add(self, entry: GTFEntry) -> None:
+        """Adds the given gtf entry to the gene.
+
+        Args:
+            entry (GTFEntry): The entry that should be added to the
+                gene. Can be of any :class:`FeatureType`.
+
+                *Warning*: The ``start`` and ``end`` attribute of the
+                entry has to align with Python indexing, starting at
+                zero and the end is exclusive.
         """
-        if gene_id is not None:
-            if entry is None and gene_id in self._genes:
-                raise KeyError(f"Gene ID {gene_id!r} is not unique")
+        gene_id = entry.attribute("gene_id")
+        if gene_id not in self._genes:
+            self._genes[gene_id] = Gene(gene_id)
+        self._genes[gene_id].add(entry)
 
-            if gene_id not in self._genes:
-                self._genes[gene_id] = Gene(gene_id, strand=strand)
+    def rename(self, name: str | Callable[[str], str]) -> None:
+        """Changes the names of all sequences in this annotation.
 
-            if entry is not None:
-                if transcript_id is None:
-                    raise ValueError(
-                        "If entry is given, "
-                        "'transcript_id' has to be specified"
-                    )
-                self._genes[gene_id].add(entry, transcript_id)
-        else:
-            raise ValueError("gene_id has to be supplied")
+        Args:
+            name (str | callable): If a string is given, changes all
+                sequence names to that string. If a callable is given,
+                this callable is applied to the sequence names, which
+                are then set to the returned string.
+        """
+        for key in self._genes:
+            self._genes[key].rename(name)
 
     def finalize(self) -> None:
         """Add to all Transcript objects transcript, intron, CDS, exon
@@ -140,3 +161,6 @@ class Annotation:
 
     def __iter__(self) -> Iterator[Gene]:
         return iter(list(self._genes.values()))
+
+    def __getitem__(self, key: str) -> Gene:
+        return self._genes[key]

@@ -44,18 +44,52 @@ def load_fasta(
             current_sequence += line.strip()
     raw_sequences.append(current_sequence.encode())
 
-    translation_table = bytes.maketrans(
+    table = bytearray([4]*256)
+    mappings = {a: b for a, b in zip(
         b"ACGTNnacgt",
-        bytes([0, 1, 2, 3, 4, 4, 5, 6, 7, 8]),
-    )
-    sequences = []
-    for seq, name in zip(raw_sequences, name_sequences):
-        translated = seq.translate(translation_table)
-        sequences.append(Sequence(
-            np.frombuffer(translated, dtype=np.int8)[np.newaxis, :],
+        [0, 1, 2, 3, 4, 4, 5, 6, 7, 8],
+    )}
+    for k, v in mappings.items():
+        table[k] = v
+    translation_table = bytes(table)
+
+    sequences = [
+        Sequence(
+            np.frombuffer(
+                seq.translate(translation_table),
+                dtype=np.int8,
+            )[np.newaxis, :],
             name=name,
-        ))
+        ) for seq, name in zip(raw_sequences, name_sequences)
+    ]
     fasta = FASTA(sequences)
     if T is not None:
         fasta.resample(T, drop_remainder=drop_remainder)
     return fasta
+
+
+def write_fasta(
+    fasta: FASTA,
+    path: Path| str,
+    line_length: int = 80,
+) -> None:
+    path = Path(path)
+    if path.is_file() and path.exists():
+        raise FileExistsError(f"The file {path} already exists.")
+    if path.is_dir():
+        raise IsADirectoryError(
+            f"The given path {path} points to a directory but should be a "
+            "file."
+        )
+
+    translation_table = bytes.maketrans(
+        bytes([0, 1, 2, 3, 4, 5, 6, 7, 8]),
+        b"ACGTNacgt",
+    )
+    with open(path, "w") as f:
+        for sequence in fasta:
+            f.write(f">{sequence.name}\n")
+            translated = sequence.flat.tobytes().translate(translation_table)
+            translated = translated.decode("utf-8")
+            for i in range(0, len(translated), line_length):
+                f.write(translated[i:i+line_length]+"\n")

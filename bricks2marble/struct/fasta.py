@@ -1,4 +1,4 @@
-from typing import Literal, overload
+from typing import Callable, Literal, overload
 
 import numpy as np
 from pydantic import BaseModel
@@ -17,6 +17,17 @@ ENCODING = np.array([
     [0, 1, 0, 0, 0, 1],
     [0, 0, 1, 0, 0, 1],
     [0, 0, 0, 1, 0, 1],
+])
+ENCODING_EXPANDED_REPEATS = np.array([
+    [1, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 1, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 1, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 1, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 1, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 1],
 ])
 
 
@@ -147,6 +158,7 @@ class Sequence:
         self,
         sequences: np.ndarray | None = None,
         pad_index: int = 4,
+        expand_repeats: bool = False,
     ) -> np.ndarray:
         """Returns a one-hot encoded version of :meth:`Sequence.nuc` of
         shape ``(N, T, 6)``.
@@ -157,9 +169,16 @@ class Sequence:
             pad_index (int, optional): What to replace the padding
                 character (-1) by before encoding. Default to 4, which
                 is an `N`.
+            expand_repeats (bool, optional): If set to True, also
+                one-hot encodes repeat-masked positions and instead
+                returns an array of shape ``(N, T, 9)``. The default is
+                that repeat-masked positions are indicated as a flag in
+                the last dimension.
         """
         nuc = self.nuc if sequences is None else sequences
         nuc[nuc == -1] = pad_index
+        if expand_repeats:
+            return ENCODING_EXPANDED_REPEATS[nuc]
         return ENCODING[nuc]
 
     def resample(self, T: int, drop_remainder: bool = False) -> "Sequence":
@@ -248,6 +267,17 @@ class Sequence:
             probs[token] += (self.nuc == index).sum() / size
         return probs
 
+    def string(self) -> str:
+        """Returns the string representation of this sequence as one
+        long seqeunce of nucleotides.
+        """
+        translation_table = bytes.maketrans(
+            bytes([0, 1, 2, 3, 4, 5, 6, 7, 8]),
+            b"ACGTNacgt",
+        )
+        translated = self.flat.tobytes().translate(translation_table)
+        return translated.decode("utf-8")
+
     def copy(self) -> "Sequence":
         return Sequence(
             self._sequence,
@@ -273,8 +303,7 @@ class FASTA:
     :meth:`bricks2marble.load_fasta`.
 
     Args:
-        sequences (list[Sequence]): An list of :class:`Sequence`
-            objects.
+        sequences (list[Sequence]): A list of :class:`Sequence` objects.
     """
 
     def __init__(self, sequences: list[Sequence]) -> None:
@@ -328,6 +357,7 @@ class FASTA:
         self,
         sequences: np.ndarray | None = None,
         pad_index: int = 4,
+        expand_repeats: bool = False,
     ) -> np.ndarray:
         """Returns a one-hot encoded version of :meth:`FASTA.nuc` of
         shape ``(N, T, 6)``.
@@ -338,9 +368,16 @@ class FASTA:
             pad_index (int, optional): What to replace the padding
                 character (-1) by before encoding. Default to 4, which
                 is an `N`.
+            expand_repeats (bool, optional): If set to True, also
+                one-hot encodes repeat-masked positions and instead
+                returns an array of shape ``(N, T, 9)``. The default is
+                that repeat-masked positions are indicated as a flag in
+                the last dimension.
         """
         nuc = self.nuc if sequences is None else sequences
         nuc[nuc == -1] = pad_index
+        if expand_repeats:
+            return ENCODING_EXPANDED_REPEATS[nuc]
         return ENCODING[nuc]
 
     def occurences(
@@ -365,19 +402,44 @@ class FASTA:
             for k in occs[0]
         }
 
+    def rename(self, name: str | Callable[[str], str]) -> None:
+        """Changes the name of all sequences in this FASTA object.
+
+        Args:
+            name (str | callable): If a string is given, changes the
+                sequence names to that string. If a callable is given,
+                this callable is applied to the sequence names, which
+                are then set to the returned string.
+        """
+        if isinstance(name, str):
+            rename = lambda _: name
+        else:
+            rename = name
+
+        for seq in self._sequences:
+            seq.name = rename(seq.name)
+
     def copy(self) -> "FASTA":
         return FASTA([seq.copy() for seq in self._sequences])
 
     @overload
-    def __getitem__(self, key: int) -> Sequence:
+    def __getitem__(self, key: int | str) -> Sequence:
         ...
     @overload
     def __getitem__(self, key: slice) -> "FASTA":
         ...
-    def __getitem__(self, key: int | slice) -> "Sequence | FASTA":
+    def __getitem__(self, key: int | slice | str) -> "Sequence | FASTA":
         if isinstance(key, slice):
             return FASTA(self._sequences[key])
-        return self._sequences[key]
+        if isinstance(key, int):
+            return self._sequences[key]
+        for seq in self._sequences:
+            if seq.name == key:
+                return seq
+        raise KeyError(f"Sequence with name {key!r} does not exist.")
+
+    def __len__(self) -> int:
+        return len(self._sequences)
 
     def __str__(self) -> str:
         return "[" + ", ".join(str(seq) for seq in self._sequences) + "]"

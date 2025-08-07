@@ -4,6 +4,7 @@ import string
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path
+from typing import overload
 
 import plotly.express as px
 from plotly import graph_objects as go
@@ -19,6 +20,18 @@ class CompareMetrics(BaseModel):
     sensitivity: float
     precision: float
 
+    missed: float | None = None
+    novel: float | None = None
+
+    @property
+    def F1(self) -> float:
+        if self.precision == 0 or self.sensitivity == 0:
+            return 0
+        return (
+            2 * self.precision * self.sensitivity
+            / (self.precision + self.sensitivity)
+        )
+
 
 class AnnotationComparison(BaseModel):
 
@@ -30,11 +43,25 @@ class AnnotationComparison(BaseModel):
     locus: CompareMetrics
 
 
+@overload
 def compare_gtf(
     annotation: Annotation | Path | str,
     reference: Annotation | Path | str,
-    gffcompare: Path | str | None = None,
+    gffcompare: Path | str | None = ...,
 ) -> AnnotationComparison:
+    ...
+@overload
+def compare_gtf(
+    annotation: list[Annotation | Path | str],
+    reference: Annotation | Path | str,
+    gffcompare: Path | str | None = ...,
+) -> list[AnnotationComparison]:
+    ...
+def compare_gtf(
+    annotation: Annotation | Path | str | list[Annotation | Path | str],
+    reference: Annotation | Path | str,
+    gffcompare: Path | str | None = None,
+) -> AnnotationComparison | list[AnnotationComparison]:
     """Compare two annotation with the tool gffcompare:
     https://github.com/gpertea/gffcompare
 
@@ -48,7 +75,10 @@ def compare_gtf(
             compare to the reference. If an
             :class:`~bricks2marble.struct.annotation.Annotation` is
             given, this will be converted to a gtf file first with the
-            `.to_gtf()` method.
+            `.to_gtf()` method. You can also supply a sequence of
+            annotations, each of which are then compared to the
+            reference and metrics for all of these comparisons are
+            returned.
         reference (Annotation or Path): The reference annotation. If an
             :class:`~bricks2marble.struct.annotation.Annotation` is
             given, this will be converted to a gtf file first with the
@@ -59,12 +89,23 @@ def compare_gtf(
 
     Returns:
         AnnotationComparison: See
-            :class:`bricks2marble.tools.gtf.AnnotationComparison`.
+            :class:`bricks2marble.tools.gtf.AnnotationComparison`. If a
+            sequence of annotations is given, instead is a sequence of
+            comparisons.
     """
-    if isinstance(annotation, str): annotation = Path(annotation)
-    if isinstance(reference, str): reference = Path(reference)
-    if isinstance(gffcompare, Path): gffcompare = str(gffcompare)
-    if gffcompare is None: gffcompare = "gffcompare"
+    seq_given = True
+    if not isinstance(annotation, list):
+        annotation = [annotation]
+        seq_given = False
+
+    for i in range(len(annotation)):
+        if isinstance(annotation[i], str):
+            annotation[i] = Path(annotation[i]).expanduser()
+    if isinstance(reference, str): reference = Path(reference).expanduser()
+    if isinstance(gffcompare, Path | str):
+        gffcompare = str(Path(gffcompare).expanduser())
+    elif gffcompare is None:
+        gffcompare = "gffcompare"
 
     random_id = "".join(
         random.choices(string.ascii_uppercase + string.digits, k=10)
@@ -72,53 +113,70 @@ def compare_gtf(
     cache_dir = Path.cwd() / f"_cache_{random_id}/"
     cache_dir.mkdir(exist_ok=True)
 
-    generated: list[str] = []
-
-    if isinstance(annotation, Annotation):
-        annotation.to_gtf(cache_dir / "annotation.gtf")
-        annotation = cache_dir / "annotation.gtf"
-        generated.append(str(annotation))
+    for i in range(len(annotation)):
+        if isinstance(annotation[i], Annotation):
+            annotation[i].to_gtf(cache_dir / f"annotation_{i}.gtf")
+            annotation[i] = cache_dir / f"annotation_{i}.gtf"
     if isinstance(reference, Annotation):
         reference.to_gtf(cache_dir / "reference.gtf")
         reference = cache_dir / "reference.gtf"
-        generated.append(str(reference))
 
-    subprocess.run([
-        f"{gffcompare}",
-        "--strict-match",
-        "-e 0",
-        "-T",
-        "-o",
-        str(cache_dir) + ("/" if not str(cache_dir).endswith("/") else ""),
-        "-r",
-        str(reference),
-        str(annotation),
-    ], check=True)
+    results = []
+    for i in range(len(annotation)):
+        subprocess.run([
+            f"{gffcompare}",
+            "--strict-match",
+            "-e 0",
+            "-T",
+            "-o",
+            str(cache_dir) + ("/" if not str(cache_dir).endswith("/") else ""),
+            "-r",
+            str(reference),
+            str(annotation[i]),
+        ], check=True, stderr=subprocess.DEVNULL)
 
-    results = {}
-    pattern = re.compile(r'^\s*(.+?) level:\s+([\d.]+)\s+\|\s+([\d.]+)')
+        pattern = re.compile(
+            r'^\s*(.+?) level:\s+([\d.]+|-nan)\s+\|\s+([\d.]+|-nan)'
+        )
+        pattern_mn = re.compile(
+            r'^\s*(Missed|Novel) (.+?):[\s/\d.]+\(\s*([\d.]+)%\)'
+        )
 
-    with open(cache_dir / ".stats", 'r', encoding='utf-8') as file:
-        for line in file:
-            match = pattern.match(line)
-            if match:
-                level = match.group(1).strip().lower().replace(" ", "_")
-                sensitivity = float(match.group(2))
-                precision = float(match.group(3))
-                results[level] = {
-                    'sensitivity': sensitivity,
-                    'precision': precision
-                }
+        results.append({})
+        with open(cache_dir / ".stats", 'r', encoding='utf-8') as file:
+            for line in file.readlines():
+                match = pattern.match(line)
+                match_mn = pattern_mn.match(line)
+                if match is not None:
+                    level = match.group(1).strip().lower().replace(" ", "_")
+                    sensitivity = float(match.group(2))
+                    if match.group(3) == "-nan":
+                        precision = 0
+                    else:
+                        precision = float(match.group(3))
+                    results[-1][level] = {
+                        'sensitivity': sensitivity / 100,
+                        'precision': precision / 100,
+                    }
+                if match_mn is not None:
+                    level = match_mn.group(2).strip()[:-1]
+                    if level == "loc": level = "locus"
+                    mn = match_mn.group(1).lower()
+                    perc = float(match_mn.group(3))
+                    results[-1][level] = results[-1][level] | {
+                        mn: round(perc / 100, 3),
+                    }
 
-    generated += [".annotated.gtf", ".loci", ".stats", ".tracking"]
-
-    for name in generated:
+    for name in cache_dir.iterdir():
         (cache_dir / name).unlink()
     if not any(cache_dir.iterdir()):
         cache_dir.rmdir()
 
     try:
-        return AnnotationComparison(**results)
+        if seq_given:
+            return [AnnotationComparison(**result) for result in results]
+        else:
+            return AnnotationComparison(**results[0])
     except ValidationError:
         return AnnotationComparison(
             base=CompareMetrics(sensitivity=0, precision=0),
@@ -134,9 +192,10 @@ def plot_comparison(
     metrics: Sequence[AnnotationComparison],
     labels: Sequence[str] | None = None,
     zoom: bool = False,
+    flip_axes: bool = False,
 ) -> go.Figure:
     fig = make_subplots(
-        rows=2,
+        rows=3,
         cols=3,
         subplot_titles=[
             "Base",
@@ -145,6 +204,12 @@ def plot_comparison(
             "Exon",
             "Intron-Chain",
             "Locus",
+            "Percentage of novel and missing features",
+        ],
+        specs=[
+            [{'type': 'scatter'}, {'type': 'scatter'}, {'type': 'scatter'}],
+            [{'type': 'scatter'}, {'type': 'scatter'}, {'type': 'scatter'}],
+            [{'type': 'bar', 'colspan': 3}, None, None],
         ],
         horizontal_spacing=0.05,
         vertical_spacing=0.1,
@@ -159,15 +224,33 @@ def plot_comparison(
         for j, key in enumerate(keys):
             row = j // 3 + 1
             col = j % 3 + 1
+            x, y = (
+                getattr(metric, key).sensitivity,
+                getattr(metric, key).precision,
+            )
+            if flip_axes:
+                x, y = y, x
             fig.add_trace(go.Scatter(
-                x=[getattr(metric, key).sensitivity],
-                y=[getattr(metric, key).precision],
+                x=[x],
+                y=[y],
                 name=f"Model {i+1}" if labels is None else labels[i],
                 marker_symbol=raw_symbols[i%10],
                 marker_color=colors[i],
                 showlegend=j==0,
                 legendgroup=f"group {i}",
             ), row=row, col=col)
+            missed = getattr(getattr(metric, key), "missed", None)
+            novel = getattr(getattr(metric, key), "novel", None)
+            if missed is not None and novel is not None:
+                fig.add_trace(go.Bar(
+                    x=[key, key],
+                    y=[-missed, novel],
+                    name=f"Model {i+1}" if labels is None else labels[i],
+                    marker_color=colors[i],
+                    showlegend=False,
+                    legendgroup=f"group {i}",
+                ), row=3, col=1)
+
 
     for j, key in enumerate(keys):
         row = j // 3 + 1
@@ -189,7 +272,7 @@ def plot_comparison(
         )
 
         fig.add_annotation(
-            text="Sensitivity",
+            text="Sensitivity" if not flip_axes else "Precision",
             xref=f"x{j+1}", yref=f"y{j+1}",
             x=1.0, y=0,
             showarrow=False,
@@ -198,7 +281,7 @@ def plot_comparison(
             xanchor="right", yanchor="bottom",
         )
         fig.add_annotation(
-            text="Precision",
+            text="Precision" if not flip_axes else "Sensitivity",
             xref=f"x{j+1}", yref=f"y{j+1}",
             x=0, y=1.0,
             showarrow=False,
@@ -207,11 +290,42 @@ def plot_comparison(
             textangle=-90,
             xanchor="left", yanchor="top",
         )
+    fig.add_annotation(
+        text="Novel",
+        xref="paper", yref="y7",
+        x=0.05, y=0.5,
+        showarrow=False,
+        font=dict(size=14),
+        opacity=0.5,
+        textangle=-90,
+        xanchor="left", yanchor="middle",
+    )
+    fig.add_annotation(
+        text="Missed",
+        xref="paper", yref="y7",
+        x=0.05, y=-0.5,
+        showarrow=False,
+        font=dict(size=14),
+        opacity=0.5,
+        textangle=-90,
+        xanchor="left", yanchor="middle",
+    )
 
     fig.update_layout(
         width=1000,
-        height=600,
+        height=900,
         margin=dict(l=30, r=0, t=30, b=30),
         title=dict(xref="container", yref="container", yanchor="bottom"),
+        xaxis7=dict(domain=[0.05, 0.95]),
+        yaxis7=dict(
+            tickmode='array',
+            tickvals=(
+                [-i/10 for i in range(1, 11)] + [i/10 for i in range(1, 11)]
+            ),
+            ticktext=[str(i/10) for i in range(1, 11)],
+            zeroline=True,
+            zerolinewidth=2,
+            zerolinecolor='black',
+        ),
     )
     return fig
