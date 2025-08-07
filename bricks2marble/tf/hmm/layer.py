@@ -1,4 +1,5 @@
 import tensorflow as tf
+from hidten import HMMMode
 from hidten.config import ModelConfig, with_config
 from hidten.tf import TFHMM, TFCategoricalEmitter
 
@@ -143,10 +144,20 @@ class AnnotationHMM(tf.keras.Layer):
             # B, T, 2*H(, D)
         return x
 
-    def call(self, x: tf.Tensor, nuc: tf.Tensor) -> tf.Tensor:
+    def call(
+        self,
+        x: tf.Tensor,
+        nuc: tf.Tensor,
+        mode: HMMMode = HMMMode.POSTERIOR,
+        parallel: int = 1,
+    ) -> tf.Tensor:
         x, nuc = self.preprocess(x, nuc)
         nuc_left, nuc_right = left_right_3mers(nuc)  # type: ignore
-        x = self.hmm(x, nuc_left, nuc_right)  # type: ignore
+        x = self.hmm(
+            x, nuc_left, nuc_right,
+            mode=mode,
+            parallel=parallel,
+        )  # type: ignore
         x = self.postprocess(x)
         if self.config.nudge_IR > 0: self.regularizer(x)
         return x
