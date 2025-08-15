@@ -34,6 +34,8 @@ class AnnotationHMMConfig(ModelConfig):
     def n_states(self) -> int:
         return 12 + 3*self.intron_state_chain
 
+    model_config = {"frozen": True, "extra": "forbid"}
+
 
 @with_config(AnnotationHMMConfig)
 class AnnotationHMM(tf.keras.Layer):

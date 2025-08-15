@@ -1,5 +1,3 @@
-from typing import Sequence
-
 import numpy as np
 import tensorflow as tf
 
@@ -257,58 +255,94 @@ def state_transitions(
         [ 6,  4, np.log(T_exon - 1)],
 
         [ 4,  8, 0],
-        [11,  4, 0],
-
         [ 5,  9, np.log(1/2)],
-        [12,  5, 0],
-
         [ 6, 10, 0],
-        [13,  6, 0],
     ])
     # intron loops
-    introns = np.array(
-        [
-            [i+1, i+1, np.log(T_intron / isc - 1) + np.random.normal(0, 1e-2)]
-            for i in range(3*isc)
-        ]
-        + [
-            [i+1+j*isc, i+2+j*isc, 0]
-            for i in range(isc-1) for j in range(3)
-        ]
-        + [
-            [         isc, 11+3*(isc-1), 0],
-            [       2*isc, 12+3*(isc-1), 0],
-            [       3*isc, 13+3*(isc-1), 0],
-            [ 8+3*(isc-1),            1, 0],
-            [ 9+3*(isc-1),        isc+1, 0],
-            [10+3*(isc-1),      2*isc+1, 0],
-        ]
-    )
-    values = np.r_[indices[:, 2], introns[:, 2]].astype(np.float32)
+    intron_loops = np.array([
+        # loops on intron states Ikj -> Ikj
+        [k, k] for k in range(1, 3*isc+1)
+    ])
+    intron_edges = np.array([
+        # edges between intron states Ikj -> Ik(j+1)
+        [k+j*3, k+(j+1)*3] for j in range(isc-1) for k in range(1, 4)
+    ])
+    intron_ingoing = np.array([
+        # ingoing edges EIk -> Ik0
+        [ 8+3*(isc-1), 1],
+        [ 9+3*(isc-1), 2],
+        [10+3*(isc-1), 3],
+    ])
+    intron_outgoing = np.array([
+        # outgoing edges Ikj -> IEk
+        [k+3*j, 10+k+3*(isc-1)] for j in range(isc) for k in range(1, 4)
+    ])
+    values = indices[:, 2].astype(np.float32)
     indices = indices[:, :2].astype(np.int64)
-    introns = introns[:, :2].astype(np.int64)
     if isc > 1:
         indices[indices > 0] = indices[indices > 0] + 3*(isc-1)
-    indices = np.r_[indices, introns]
+    n_edges = len(indices)
+    indices = np.r_[
+        indices,
+        intron_loops,
+        intron_edges,
+        intron_ingoing,
+        intron_outgoing,
+    ]
 
-    n_indices = indices.shape[0]
     repeats = np.arange(heads).reshape(heads, 1, 1)
-    repeats = np.tile(repeats, (1, n_indices, 1))
+    repeats = np.tile(repeats, (1, len(indices), 1))
     indices = np.tile(indices, (heads, 1, 1))
     indices = np.concatenate([repeats, indices], axis=-1, dtype=np.int64)
     indices = indices.reshape(-1, 3)
+
+    n_intron_loops = len(intron_loops)
+    n_intron_edges = len(intron_edges)
+    n_ingoing = len(intron_ingoing)
+    share = np.array(
+        # loops on intron states
+        [
+            [n_edges+k*isc, n_edges+(k+1)*isc]
+            for k in range(3)
+        ]
+        # edges between intron states
+        + [
+            [n_edges+n_intron_loops+k*(isc-1),
+             n_edges+n_intron_loops+(k+1)*(isc-1)]
+            for k in range(3)
+        ]
+        # ingoing edges
+        + [
+            [n_edges+n_intron_loops+n_intron_edges,
+             n_edges+n_intron_loops+n_intron_edges+3]
+        ]
+        # outgoing edges
+        + [
+            [n_edges+n_intron_loops+n_intron_edges+n_ingoing+k*(isc-1),
+             n_edges+n_intron_loops+n_intron_edges+n_ingoing+(k+1)*(isc-1)]
+            for k in range(3)
+        ]
+    )
+
+    values = np.r_[
+        values,
+        np.array(
+            [
+                # loops of intron states
+                np.log(T_intron / isc - 1) + np.random.normal(scale=1e-2)
+            ] * isc
+            + [0] * (2 * isc - 1)
+        )
+    ]
+
     values = np.exp(values) / np.sum(np.exp(values), -1, keepdims=True)
     values = np.tile(values, heads)
 
-    # share = np.array(
-    #     [[14, 14+3*isc]]
-    #     + ([[14+3*isc, 14+6*isc]] if isc > 1 else [[18, 21]])
-    # )
     # share = np.concatenate(
     #     [share + i*n_indices for i in range(heads)],
     #     axis=0,
     # )
-    return indices.tolist(), values, []
+    return indices.tolist(), values, share
 
 
 def state_start_dist(
