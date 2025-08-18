@@ -272,6 +272,9 @@ def state_transitions(
             for k in range(isc)
         ]
     )
+    share = np.r_[*[
+        share + i*(len(indices)//heads) for i in range(heads)
+    ]]
 
     values = np.r_[
         values,
@@ -285,7 +288,7 @@ def state_transitions(
         )
     ]
     # values = np.exp(values) / np.sum(np.exp(values), -1, keepdims=True)
-    # values = np.tile(values, heads)
+    values = np.tile(values, heads)
 
     return indices.tolist(), values, share
 
