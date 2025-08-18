@@ -5,7 +5,7 @@ from hidten.tf import TFHMM, TFCategoricalEmitter
 
 from ..loss import UncertainPredictionRegularizer
 from .tools import (get_nuc_emission_distribution, left_right_3mers,
-                    state_start_dist, state_transitions)
+                    state_names, state_start_dist, state_transitions)
 
 
 class AnnotationHMMConfig(ModelConfig):
@@ -106,6 +106,9 @@ class AnnotationHMM(tf.keras.Layer):
             input_shape[:-1] + (65, ),
             input_shape[:-1] + (65, ),
         ))
+
+    def state_names(self) -> list[str]:
+        return state_names(self.config.intron_state_chain)
 
     def preprocess(
         self,

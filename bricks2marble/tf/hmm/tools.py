@@ -244,19 +244,27 @@ def state_transitions(
     list[tuple[int, int, int]], np.ndarray, list[tuple[int, int]],
 ]:
     indices = np.array([
+        # IR -> IR -> START -> E1 -> STOP -> IR
         [ 0,  0, np.log(T_ir - 1)],
         [ 0,  7, 0],
         [ 7,  5, 0],
         [ 5, 14, np.log(1/2)],
         [14,  0, 0],
 
+        # E0 -> E1 -> E2 -> E0
         [ 4,  5, np.log(T_exon - 1)],
         [ 5,  6, np.log(T_exon - 1)],
         [ 6,  4, np.log(T_exon - 1)],
 
+        # Ek -> EIk
         [ 4,  8, 0],
         [ 5,  9, np.log(1/2)],
         [ 6, 10, 0],
+
+        # IEk -> Ek
+        [11, 4, 0],
+        [12, 5, 0],
+        [13, 6, 0],
     ])
     # intron loops
     intron_loops = np.array([
@@ -302,14 +310,14 @@ def state_transitions(
     share = np.array(
         # loops on intron states
         [
-            [n_edges+k*isc, n_edges+(k+1)*isc]
-            for k in range(3)
+            [n_edges+k*3, n_edges+(k+1)*3]
+            for k in range(isc)
         ]
         # edges between intron states
         + [
-            [n_edges+n_intron_loops+k*(isc-1),
-             n_edges+n_intron_loops+(k+1)*(isc-1)]
-            for k in range(3)
+            [n_edges+n_intron_loops+k*3,
+             n_edges+n_intron_loops+(k+1)*3]
+            for k in range(isc-1)
         ]
         # ingoing edges
         + [
@@ -318,9 +326,9 @@ def state_transitions(
         ]
         # outgoing edges
         + [
-            [n_edges+n_intron_loops+n_intron_edges+n_ingoing+k*(isc-1),
-             n_edges+n_intron_loops+n_intron_edges+n_ingoing+(k+1)*(isc-1)]
-            for k in range(3)
+            [n_edges+n_intron_loops+n_intron_edges+n_ingoing+k*3,
+             n_edges+n_intron_loops+n_intron_edges+n_ingoing+(k+1)*3]
+            for k in range(isc)
         ]
     )
 
@@ -330,8 +338,9 @@ def state_transitions(
             [
                 # loops of intron states
                 np.log(T_intron / isc - 1) + np.random.normal(scale=1e-2)
-            ] * isc
-            + [0] * (2 * isc - 1)
+                for _ in range(isc)
+            ]
+            + [0] * (2 * isc)
         )
     ]
 
@@ -369,3 +378,13 @@ def state_start_dist(
         axis=0,
     )
     return indices.tolist(), values, share.tolist()
+
+
+def state_names(isc: int = 1) -> list[str]:
+    return (
+        ["IR"]
+        + [f"I{k}{j}" for j in range(isc) for k in range(3)]
+        + ["E0", "E1", "E2"]
+        + ["START", "EI0", "EI1", "EI2"]
+        + ["IE0", "IE1", "IE2", "STOP"]
+    )
