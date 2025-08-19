@@ -16,6 +16,7 @@ class EmitterConfig(ModelConfig):
 
     heads: int = 1
     use_reverse_strand: bool = False
+    sigmoid_activation: bool = False
 
     share_noncoding_params: bool = False
 
@@ -69,7 +70,11 @@ class Emitter(tf.keras.layers.Layer):
                 ] * self.config.intron_state_chain
                 + [self.emission_kernel[:, 1:, :]]
             , axis=1)
+            if self.config.sigmoid_activation:
+                return tf.nn.sigmoid(B)
             return tf.nn.softmax(B)
+        if self.config.sigmoid_activation:
+            return tf.nn.sigmoid(self.emission_kernel)
         return tf.nn.softmax(self.emission_kernel)
 
     def call(
@@ -111,6 +116,8 @@ class Emitter(tf.keras.layers.Layer):
             codon_emit += 1e-7  # type: ignore
 
         emit = tf.einsum("...s,hqs->h...q", x[0], self.B)
+        if self.config.sigmoid_activation:
+            emit /= self.emission_kernel.shape[-1]
 
         return emit * codon_emit
 

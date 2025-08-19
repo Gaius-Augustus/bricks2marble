@@ -23,6 +23,8 @@ class HMMLayerConfig(ModelConfig):
     use_reverse_strand: bool = False
     parallel_factor: int = 1
 
+    emitter_sigmoid_activation: bool = False
+
     initial_exon_len: int = 100
     initial_intron_len: int = 10000
     initial_ir_len: int = 10000
@@ -60,6 +62,7 @@ class HMMLayer(HmmLayer):
             use_reverse_strand=self.config.use_reverse_strand,
             share_noncoding_params=self.config.share_noncoding_params,
             intron_state_chain=self.config.intron_state_chain,
+            sigmoid_activation=self.config.emitter_sigmoid_activation,
         )
         transitioner = Transitioner(
             heads=self.config.heads,
