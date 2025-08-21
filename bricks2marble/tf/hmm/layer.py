@@ -116,18 +116,19 @@ class AnnotationHMM(tf.keras.Layer):
         nuc: tf.Tensor,
     ) -> tuple[tf.Tensor, tf.Tensor]:
         if self.config.use_reverse_strand:
-            B, T, D = tf.unstack(tf.shape(nuc))  # type: ignore
-            nuc = tf.expand_dims(nuc, 0)
             nuc_reverse = tf.gather(nuc, [3, 2, 1, 0, 4], axis=-1)
             nuc_reverse = tf.reverse(nuc_reverse, [-2])
             nuc = tf.concat((nuc, nuc_reverse), axis=0)  # type: ignore
-            nuc = tf.reshape(nuc, (2*B, T, D))
-            x = tf.expand_dims(x, 0)
             x = tf.concat((x, tf.reverse(x, [-2])), axis=0)  # type: ignore
-            x = tf.reshape(x, (2*B, T, -1))
         return x, nuc
 
     def postprocess(self, x: tf.Tensor) -> tf.Tensor:
+        """If `use_reverse_strand` is active, the resulting tensor ``x``
+        will be of shape ``(B, T, 2*H)`` or ``(B, T, 2*H, D)``, where
+        ``x[:, :, :H, ...]`` is the output of the forward strand and
+        ``x[:, :, H:, ...]`` is the output of the backward strand.
+        However, both series are pointing in the same direction.
+        """
         if self.config.use_reverse_strand:
             # 2*B, T, H(, D)
             x = tf.reshape(x, tf.concat((
@@ -149,6 +150,20 @@ class AnnotationHMM(tf.keras.Layer):
             # B, T, 2*H(, D)
         return x
 
+    def call_HMM(
+        self,
+        x: tf.Tensor,
+        nuc_left: tf.Tensor,
+        nuc_right: tf.Tensor,
+        mode: HMMMode = HMMMode.POSTERIOR,
+        parallel: int = 1,
+    ) -> tf.Tensor:
+        return self.hmm(
+            x, nuc_left, nuc_right,
+            mode=mode,
+            parallel=parallel,
+        )  # type: ignore
+
     def call(
         self,
         x: tf.Tensor,
@@ -158,11 +173,7 @@ class AnnotationHMM(tf.keras.Layer):
     ) -> tf.Tensor:
         x, nuc = self.preprocess(x, nuc)
         nuc_left, nuc_right = left_right_3mers(nuc)  # type: ignore
-        x = self.hmm(
-            x, nuc_left, nuc_right,
-            mode=mode,
-            parallel=parallel,
-        )  # type: ignore
+        x = self.call_HMM(x, nuc_left, nuc_right, mode=mode, parallel=parallel)
         x = self.postprocess(x)
         if self.config.nudge_IR > 0: self.regularizer(x)
         return x
