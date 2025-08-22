@@ -1,7 +1,7 @@
 import tensorflow as tf
 from hidten import HMMMode
 from hidten.config import ModelConfig, with_config
-from hidten.tf import TFHMM, TFCategoricalEmitter
+from hidten.tf import TFHMM, TFBernoulliEmitter, TFCategoricalEmitter
 
 from ..loss import UncertainPredictionRegularizer
 from .tools import (get_nuc_emission_distribution, left_right_3mers,
@@ -72,8 +72,10 @@ class AnnotationHMM(tf.keras.Layer):
         self.hmm.transitioner.share_start = share
         self.hmm.transitioner.initializer_start = values
 
-        stream_emitter = TFCategoricalEmitter()
-        stream_emitter.initializer = tf.initializers.GlorotNormal()
+        if self.config.emitter_sigmoid_activation:
+            stream_emitter = TFBernoulliEmitter()
+        else:
+            stream_emitter = TFCategoricalEmitter()
 
         nuc_emitter_left = TFCategoricalEmitter()
         nuc_emitter_right = TFCategoricalEmitter()
@@ -103,6 +105,35 @@ class AnnotationHMM(tf.keras.Layer):
             )
 
     def build(self, input_shape: tuple[int | None, ...]) -> None:
+        D: int = input_shape[-1]  # type: ignore
+        S = self.config.n_states
+        H = self.config.heads
+        isc = self.config.intron_state_chain
+        self.hmm.emitter[0].allow = [
+            (h, i, k)
+            for h, states in enumerate([S]*H)
+            for k in range(D)
+            for i in range(states)
+        ]
+        self.hmm.emitter[0].share = ([
+            (h*D*S+i*S+1+j*3, h*D*S+i*S+4+j*3)
+            for h in range(H)
+            for i in range(D)
+            for j in range(isc)
+        ] if not self.config.share_noncoding_params else [
+            (h*D*S+i*S, h*D*S+i*S+1+isc*3)
+            for h in range(H)
+            for i in range(D)
+        ]) + [
+            (h*D*S+i*S+5+3*isc, h*D*S+i*S+8+3*isc)
+            for h in range(H)
+            for i in range(D)
+        ] + [
+            (h*D*S+i*S+8+3*isc, h*D*S+i*S+11+3*isc)
+            for h in range(H)
+            for i in range(D)
+        ]
+        self.hmm.emitter[0].initializer = tf.initializers.GlorotNormal()
         self.hmm.build((
             input_shape,
             input_shape[:-1] + (65, ),
