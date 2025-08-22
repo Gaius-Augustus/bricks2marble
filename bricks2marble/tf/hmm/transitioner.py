@@ -15,9 +15,9 @@ class TransitionerConfig(ModelConfig):
 
     heads: int = 1
     intron_state_chain: int = 1
-    initial_exon_len: int = 100
-    initial_intron_len: int = 10000
-    initial_ir_len: int = 10000
+    initial_exon_len: int | None = None
+    initial_intron_len: int | None = None
+    initial_ir_len: int | None = None
     starting_distribution_trainable: bool = True
     transitions_trainable: bool = True
     init_component_sd: float = 0.05
