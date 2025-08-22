@@ -236,13 +236,13 @@ def get_nuc_emission_distribution(
 
 def state_transitions(
     isc: int = 1,
-    T_exon: int = 100,
-    T_intron: int = 10000,
-    T_ir: int = 10000,
+    T_exon: int | None = None,
+    T_intron: int | None = None,
+    T_ir: int | None = None,
     heads: int = 1,
-) -> tuple[
-    list[tuple[int, int, int]], np.ndarray, list[tuple[int, int]],
-]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    if T_ir is None: T_ir = 10_000
+    if T_exon is None: T_exon = 250
     indices = np.array([
         # IR -> IR -> START -> E1 -> STOP -> IR
         [ 0,  0, np.log(T_ir - 1)],
@@ -290,13 +290,21 @@ def state_transitions(
     if isc > 1:
         indices[indices > 0] = indices[indices > 0] + 3*(isc-1)
     n_edges = len(indices)
-    indices = np.r_[
-        indices,
-        intron_loops,
-        intron_edges,
-        intron_ingoing,
-        intron_outgoing,
-    ]
+    if isc > 1:
+        indices = np.r_[
+            indices,
+            intron_loops,
+            intron_edges,
+            intron_ingoing,
+            intron_outgoing,
+        ]
+    else:
+        indices = np.r_[
+            indices,
+            intron_loops,
+            intron_ingoing,
+            intron_outgoing,
+        ]
 
     repeats = np.arange(heads).reshape(heads, 1, 1)
     repeats = np.tile(repeats, (1, len(indices), 1))
@@ -331,26 +339,25 @@ def state_transitions(
             for k in range(isc)
         ]
     )
+    share = np.r_[*[
+        share + i*(len(indices)//heads) for i in range(heads)
+    ]]
+
+    if T_intron is not None:
+        intron_loop_values = [
+            np.log(T_intron / isc - 1) + np.random.normal(scale=1e-2)
+            for _ in range(isc)
+        ]
+    else:
+        intron_loop_values = np.log(10**np.arange(1, 1+isc) - 1).tolist()
 
     values = np.r_[
         values,
-        np.array(
-            [
-                # loops of intron states
-                np.log(T_intron / isc - 1) + np.random.normal(scale=1e-2)
-                for _ in range(isc)
-            ]
-            + [0] * (2 * isc)
-        )
+        np.array(intron_loop_values + [0] * (2 * isc))
     ]
-
     values = np.exp(values) / np.sum(np.exp(values), -1, keepdims=True)
     values = np.tile(values, heads)
 
-    # share = np.concatenate(
-    #     [share + i*n_indices for i in range(heads)],
-    #     axis=0,
-    # )
     return indices.tolist(), values, share
 
 

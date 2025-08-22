@@ -48,6 +48,7 @@ def compare_gtf(
     annotation: Annotation | Path | str,
     reference: Annotation | Path | str,
     gffcompare: Path | str | None = ...,
+    e: int = ...,
 ) -> AnnotationComparison:
     ...
 @overload
@@ -55,12 +56,14 @@ def compare_gtf(
     annotation: list[Annotation | Path | str],
     reference: Annotation | Path | str,
     gffcompare: Path | str | None = ...,
+    e: int = ...,
 ) -> list[AnnotationComparison]:
     ...
 def compare_gtf(
     annotation: Annotation | Path | str | list[Annotation | Path | str],
     reference: Annotation | Path | str,
     gffcompare: Path | str | None = None,
+    e: int = 0,
 ) -> AnnotationComparison | list[AnnotationComparison]:
     """Compare two annotation with the tool gffcompare:
     https://github.com/gpertea/gffcompare
@@ -86,6 +89,9 @@ def compare_gtf(
         gffcompare (Path, optional): Path to the executable gffcompare.
             Defaults to just 'gffcompare', if it is properly added to
             the path.
+        e (int, optional): Option `e` of `gffcompare`. Maximum allowed
+            range of terminal exons in reference transcripts. Defaults
+            to 0.
 
     Returns:
         AnnotationComparison: See
@@ -126,7 +132,7 @@ def compare_gtf(
         subprocess.run([
             f"{gffcompare}",
             "--strict-match",
-            "-e 0",
+            f"-e {e}",
             "-T",
             "-o",
             str(cache_dir) + ("/" if not str(cache_dir).endswith("/") else ""),

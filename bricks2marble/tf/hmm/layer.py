@@ -21,9 +21,11 @@ class AnnotationHMMConfig(ModelConfig):
     use_reverse_strand: bool = False
     parallel_factor: int = 1
 
-    initial_exon_len: int = 100
-    initial_intron_len: int = 10000
-    initial_ir_len: int = 10000
+    emitter_sigmoid_activation: bool = False
+
+    initial_exon_len: int | None = None
+    initial_intron_len: int | None = None
+    initial_ir_len: int | None = None
     intron_state_chain: int = 1
     train_transitions: bool = True
     train_start_dist: bool = True
