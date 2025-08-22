@@ -38,8 +38,10 @@ class Emitter(tf.keras.layers.Layer):
         self.emission_kernel = self.add_weight(
             shape=[
                 self.config.heads,
-                self.config.n_states if not self.config.share_noncoding_params
-                    else self.config.n_states-3*self.config.intron_state_chain,
+                8 + (
+                    0 if self.config.share_noncoding_params
+                    else self.config.intron_state_chain
+                ),
                 input_shape[-1],
             ],
             initializer=tf.initializers.GlorotNormal(),
@@ -60,22 +62,30 @@ class Emitter(tf.keras.layers.Layer):
         self.B = self.make_B()
 
     def make_B(self):
+        isc = self.config.intron_state_chain
         if self.config.share_noncoding_params:
             B = tf.concat(
+                [self.emission_kernel[:, :1, :]] * (3*isc + 1)
+                    + [self.emission_kernel[:, 1:5, :]]
+                    + [self.emission_kernel[:, 5:6, :]]*3
+                    + [self.emission_kernel[:, 6:7, :]]*3
+                    + [self.emission_kernel[:, 7:8, :]],
+                axis=1,
+            )
+        else:
+            B = tf.concat(
                 [self.emission_kernel[:, :1, :]]
-                + [
-                    self.emission_kernel[:, :1, :],
-                    self.emission_kernel[:, :1, :],
-                    self.emission_kernel[:, :1, :],
-                ] * self.config.intron_state_chain
-                + [self.emission_kernel[:, 1:, :]]
-            , axis=1)
-            if self.config.sigmoid_activation:
-                return tf.nn.sigmoid(B)
-            return tf.nn.softmax(B)
+                    + [self.emission_kernel[:, i:i+1, :]
+                    for i in range(1, isc+1) for _ in range(3)]
+                    + [self.emission_kernel[:, 1+isc:5+isc, :]]
+                    + [self.emission_kernel[:, 5+isc:6+isc, :]]*3
+                    + [self.emission_kernel[:, 6+isc:7+isc, :]]*3
+                    + [self.emission_kernel[:, 7+isc:8+isc, :]],
+                axis=1,
+            )
         if self.config.sigmoid_activation:
-            return tf.nn.sigmoid(self.emission_kernel)
-        return tf.nn.softmax(self.emission_kernel)
+            return tf.nn.sigmoid(B)
+        return tf.nn.softmax(B)
 
     def call(
         self,
