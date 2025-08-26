@@ -18,6 +18,7 @@ class AnnotationHMMConfig(ModelConfig):
     intron_end_pattern: list[tuple[str, float]] = [("AGN", 1.)]
 
     heads: int = 1
+    dropout_heads: float = 0
     use_reverse_strand: bool = False
     parallel_factor: int = 1
 
@@ -103,6 +104,8 @@ class AnnotationHMM(tf.keras.Layer):
                 weight=self.config.nudge_IR,
                 class_index=0,
             )
+        if self.config.dropout_heads > 0:
+            self.dropout = tf.keras.layers.Dropout(self.config.dropout_heads)
 
     def build(self, input_shape: tuple[int | None, ...]) -> None:
         D: int = input_shape[-1]  # type: ignore
@@ -155,7 +158,12 @@ class AnnotationHMM(tf.keras.Layer):
             x = tf.concat((x, tf.reverse(x, [-2])), axis=0)  # type: ignore
         return x, nuc
 
-    def postprocess(self, x: tf.Tensor) -> tf.Tensor:
+    def postprocess(
+        self,
+        x: tf.Tensor,
+        mode: HMMMode = HMMMode.POSTERIOR,
+        training: bool = False,
+    ) -> tf.Tensor:
         """If `use_reverse_strand` is active, the resulting tensor ``x``
         will be of shape ``(B, T, 2*H)`` or ``(B, T, 2*H, D)``, where
         ``x[:, :, :H, ...]`` is the output of the forward strand and
@@ -181,6 +189,13 @@ class AnnotationHMM(tf.keras.Layer):
                 tf.shape(x)[4:],  # type: ignore
             ), 0))
             # B, T, 2*H(, D)
+        if mode == HMMMode.POSTERIOR and self.config.dropout_heads > 0:
+            B, H = tf.shape(x)[0], tf.shape(x)[2]
+            mask = tf.ones((B, H), dtype=x.dtype)
+            mask = self.dropout(mask, training=training)
+            mask = tf.expand_dims(tf.expand_dims(mask, axis=1), axis=-1)
+            mask = tf.broadcast_to(mask, tf.shape(x))
+            x = mask * x
         return x
 
     def call_HMM(
@@ -203,11 +218,12 @@ class AnnotationHMM(tf.keras.Layer):
         nuc: tf.Tensor,
         mode: HMMMode = HMMMode.POSTERIOR,
         parallel: int = 1,
+        training: bool = False,
     ) -> tf.Tensor:
         x, nuc = self.preprocess(x, nuc)
         nuc_left, nuc_right = left_right_3mers(nuc)  # type: ignore
         x = self.call_HMM(x, nuc_left, nuc_right, mode=mode, parallel=parallel)
-        x = self.postprocess(x)
+        x = self.postprocess(x, mode=mode, training=training)
         if self.config.nudge_IR > 0: self.regularizer(x)
         return x
 
