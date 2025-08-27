@@ -222,7 +222,7 @@ def plot_comparison(
             if missing_novel else []
         )
         + (
-            ["Metrics (Sensitivity | Precision | F1)"] if table else []
+            ["Metrics (Sensitivity | Precision (F1))"] if table else []
         ),
         specs=[
             [{'type': 'scatter'}, {'type': 'scatter'}, {'type': 'scatter'}],
