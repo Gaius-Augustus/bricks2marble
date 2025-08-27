@@ -194,68 +194,122 @@ def compare_gtf(
         )
 
 
+def hex_to_rgba(hex_color: str, alpha: float = 0.5) -> str:
+    hex_color = hex_color.lstrip("#")
+    r = int(hex_color[0:2],16)
+    g = int(hex_color[2:4],16)
+    b = int(hex_color[4:6],16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
 def plot_comparison(
     metrics: Sequence[AnnotationComparison],
     labels: Sequence[str] | None = None,
     zoom: bool = False,
     flip_axes: bool = False,
+    missing_novel: bool = False,
+    table: bool = False,
 ) -> go.Figure:
+    keys = ["base", "intron", "transcript", "exon", "intron_chain", "locus"]
     fig = make_subplots(
-        rows=3,
+        rows=2 + (1 if missing_novel else 0) + (1 if table else 0),
         cols=3,
         subplot_titles=[
-            "Base",
-            "Intron",
-            "Transcript",
-            "Exon",
-            "Intron-Chain",
-            "Locus",
-            "Percentage of novel and missing features",
-        ],
+            key[0].upper()+key[1:].replace("_", "-") for key in keys
+        ]
+        + (
+            ["Percentage of novel and missing features"]
+            if missing_novel else []
+        )
+        + (
+            ["Metrics (Sensitivity | Precision | F1)"] if table else []
+        ),
         specs=[
             [{'type': 'scatter'}, {'type': 'scatter'}, {'type': 'scatter'}],
             [{'type': 'scatter'}, {'type': 'scatter'}, {'type': 'scatter'}],
+        ]
+        + ([
             [{'type': 'bar', 'colspan': 3}, None, None],
-        ],
+        ] if missing_novel else [])
+        + ([
+            [{'type': 'table', 'colspan': 3}, None, None],
+        ] if table else []),
         horizontal_spacing=0.05,
         vertical_spacing=0.1,
     )
-    keys = ["base", "intron", "transcript", "exon", "intron_chain", "locus"]
+    if labels is None:
+        labels = [f"Model {i+1}" for i in range(len(metrics))]
 
     SymbolValidator = ValidatorCache.get_validator("scatter.marker", "symbol")
     raw_symbols = SymbolValidator.values[2:19*12:12]
     colors = px.colors.qualitative.Plotly
 
+    if table:
+        table_rows = [[] for _ in range(len(keys))]
+        color_cols = [[] for _ in range(len(keys))]
     for i, metric in enumerate(metrics):
         for j, key in enumerate(keys):
             row = j // 3 + 1
             col = j % 3 + 1
-            x, y = (
+            x, y, f1 = (
                 getattr(metric, key).sensitivity,
                 getattr(metric, key).precision,
+                getattr(metric, key).F1,
             )
+            if table: table_rows[j].append(
+                f"<b>{x:.3f} | {y:.3f}<br>    ({f1:.3f})</b>"
+            )
+            if table: color_cols[j].append(hex_to_rgba(colors[i], alpha=0.5))
             if flip_axes:
                 x, y = y, x
+
+            hover_text = [
+                f"{key[0].upper()+key[1:].replace('_', '-')}"
+                f"<br>Sensitivity: {x:.3f}<br>Precision: {y:.3f}"
+                f"<br>F1: {f1:.3f}"
+            ]
             fig.add_trace(go.Scatter(
                 x=[x],
                 y=[y],
-                name=f"Model {i+1}" if labels is None else labels[i],
-                marker_symbol=raw_symbols[i%10],
-                marker_color=colors[i],
+                name=labels[i],
+                marker=dict(
+                    symbol=raw_symbols[i%10],
+                    color=colors[i],
+                    size=8,
+                ),
                 showlegend=j==0,
                 legendgroup=f"group {i}",
+                text=hover_text,
+                hoverinfo="text"
             ), row=row, col=col)
+
             missed = getattr(getattr(metric, key), "missed", None)
             novel = getattr(getattr(metric, key), "novel", None)
-            if missed is not None and novel is not None:
+            if missing_novel and missed is not None and novel is not None:
                 fig.add_trace(go.Bar(
                     x=[key, key],
                     y=[-missed, novel],
-                    name=f"Model {i+1}" if labels is None else labels[i],
+                    name=labels[i],
                     marker_color=colors[i],
                     showlegend=False,
                     legendgroup=f"group {i}",
                 ), row=3, col=1)
+
+    if table:
+        fig.add_trace(go.Table(
+            header=dict(
+                values=[
+                    key[0].upper()+key[1:].replace('_', '-') for key in keys
+                ],
+                align="center",
+                font=dict(size=14),
+            ),
+            cells=dict(
+                values=table_rows,
+                fill_color=color_cols,
+                align="center",
+            ),
+        ), row=4 if missing_novel else 3, col=1)
 
 
     for j, key in enumerate(keys):
@@ -296,30 +350,34 @@ def plot_comparison(
             textangle=-90,
             xanchor="left", yanchor="top",
         )
-    fig.add_annotation(
-        text="Novel",
-        xref="paper", yref="y7",
-        x=0.05, y=0.5,
-        showarrow=False,
-        font=dict(size=14),
-        opacity=0.5,
-        textangle=-90,
-        xanchor="left", yanchor="middle",
-    )
-    fig.add_annotation(
-        text="Missed",
-        xref="paper", yref="y7",
-        x=0.05, y=-0.5,
-        showarrow=False,
-        font=dict(size=14),
-        opacity=0.5,
-        textangle=-90,
-        xanchor="left", yanchor="middle",
-    )
+
+    if missing_novel:
+        fig.add_annotation(
+            text="Novel",
+            xref="paper", yref="y7",
+            x=0.05, y=0.5,
+            showarrow=False,
+            font=dict(size=14),
+            opacity=0.5,
+            textangle=-90,
+            xanchor="left", yanchor="middle",
+        )
+        fig.add_annotation(
+            text="Missed",
+            xref="paper", yref="y7",
+            x=0.05, y=-0.5,
+            showarrow=False,
+            font=dict(size=14),
+            opacity=0.5,
+            textangle=-90,
+            xanchor="left", yanchor="middle",
+        )
 
     fig.update_layout(
         width=1000,
-        height=900,
+        height=600
+               + (300 if missing_novel else 0)
+               + (200+50*len(metrics) if table else 0),
         margin=dict(l=30, r=0, t=30, b=30),
         title=dict(xref="container", yref="container", yanchor="bottom"),
         xaxis7=dict(domain=[0.05, 0.95]),
