@@ -55,12 +55,19 @@ class Gene:
         for key in self._transcripts:
             self._transcripts[key].rename(name)
 
-    def finalize(self) -> None:
+    def finalize(self, min_cds_length: int | None = None) -> None:
         """Add to all Transcript objects transcript, intron, CDS, exon
         coordinates if they were not included in the gtf file.
+
+        Args:
+            min_cds_length (int, optional): Minimal length of coding
+                regions. All transcripts with a shorter coding region
+                will be deleted. Defaults to no checks for length.
         """
         for k in self._transcripts:
-            self._transcripts[k].finalize()
+            flag = self._transcripts[k].finalize(min_cds_length=min_cds_length)
+            if not flag:
+                self._transcripts.pop(k)
 
     def to_list(self) -> list[GTFEntry]:
         if len(self._transcripts) == 0:
@@ -128,13 +135,18 @@ class Annotation:
         for key in self._genes:
             self._genes[key].rename(name)
 
-    def finalize(self) -> None:
+    def finalize(self, min_cds_length: int | None = None) -> None:
         """Add to all Transcript objects transcript, intron, CDS, exon
         coordinates if they were not included in the gtf file. Delete
         all transripts that have no exons or CDS.
+
+        Args:
+            min_cds_length (int, optional): Minimal length of coding
+                regions. All transcripts with a shorter coding region
+                will be deleted. Defaults to no checks for length.
         """
         for gene in self:
-            gene.finalize()
+            gene.finalize(min_cds_length=min_cds_length)
 
     def to_list(self) -> list[GTFEntry]:
         """Returns a list of :class:`GTFEntry` objects."""

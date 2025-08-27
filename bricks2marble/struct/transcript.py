@@ -202,14 +202,21 @@ class Transcript:
         cds = self.coords(FeatureType.CDS)
         return sum([c[1] - c[0] + 1 for c in cds])
 
-    def finalize(self) -> bool:
+    def finalize(self, min_cds_length: int | None = None) -> bool:
         """Cleans up the entries in the Transcript by adding missing
         :class:`GTFEntry` objects.
+
+        Args:
+            min_cds_length (int, optional): Minimal length of coding
+                regions. If this transcript has a shorter coding region,
+                the method returns false. Defaults to no checks.
         """
         if self.features[FeatureType.CDS]==self.features[FeatureType.Exon]==0:
             warnings.warn(
                 f"There are no CDS or exon entries in transcript {self.id}."
             )
+        if min_cds_length is not None and self.get_cds_len() < min_cds_length:
+            return False
         self.find_introns()
         self.fix_cds_frames()
         self.find_start_stop_codon()
