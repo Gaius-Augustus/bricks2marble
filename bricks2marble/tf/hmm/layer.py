@@ -3,7 +3,7 @@ from hidten import HMMMode
 from hidten.config import ModelConfig, with_config
 from hidten.tf import TFHMM, TFBernoulliEmitter, TFCategoricalEmitter
 
-from ..loss import UncertainPredictionRegularizer
+from ..loss import RepeatsNonCodingRegularizer, UncertainPredictionRegularizer
 from .tools import (get_nuc_emission_distribution, left_right_3mers,
                     state_names, state_start_dist, state_transitions)
 
@@ -32,6 +32,7 @@ class AnnotationHMMConfig(ModelConfig):
     train_start_dist: bool = True
     share_noncoding_params: bool = False
     nudge_IR: float = 0.0
+    nudge_repeats_noncoding: float = 0.0
 
     @property
     def n_states(self) -> int:
@@ -104,6 +105,12 @@ class AnnotationHMM(tf.keras.Layer):
                 weight=self.config.nudge_IR,
                 class_index=0,
             )
+        if self.config.nudge_repeats_noncoding > 0:
+            self.repeats_regularizer = RepeatsNonCodingRegularizer(
+                weight=self.config.nudge_repeats_noncoding,
+                use_reverse_strand=self.config.use_reverse_strand,
+                non_coding_start_index=1+3*self.config.intron_state_chain,
+            )
         if self.config.dropout_heads > 0:
             self.dropout = tf.keras.layers.Dropout(self.config.dropout_heads)
 
@@ -150,13 +157,18 @@ class AnnotationHMM(tf.keras.Layer):
         self,
         x: tf.Tensor,
         nuc: tf.Tensor,
-    ) -> tuple[tf.Tensor, tf.Tensor]:
+    ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor | None]:
+        if self.config.nudge_repeats_noncoding > 0:
+            r = nuc[..., 5:6]
+            nuc = nuc[..., :5]
         if self.config.use_reverse_strand:
             nuc_reverse = tf.gather(nuc, [3, 2, 1, 0, 4], axis=-1)
             nuc_reverse = tf.reverse(nuc_reverse, [-2])
             nuc = tf.concat((nuc, nuc_reverse), axis=0)  # type: ignore
             x = tf.concat((x, tf.reverse(x, [-2])), axis=0)  # type: ignore
-        return x, nuc
+        if self.config.nudge_repeats_noncoding > 0:
+            return x, nuc, r
+        return x, nuc, None
 
     def postprocess(
         self,
@@ -220,11 +232,13 @@ class AnnotationHMM(tf.keras.Layer):
         parallel: int = 1,
         training: bool = False,
     ) -> tf.Tensor:
-        x, nuc = self.preprocess(x, nuc)
+        x, nuc, r = self.preprocess(x, nuc)
         nuc_left, nuc_right = left_right_3mers(nuc)  # type: ignore
         x = self.call_HMM(x, nuc_left, nuc_right, mode=mode, parallel=parallel)
         x = self.postprocess(x, mode=mode, training=training)
-        if self.config.nudge_IR > 0: self.regularizer(x)
+        if self.config.nudge_IR > 0 and training: self.regularizer(x)
+        if self.config.nudge_repeats_noncoding > 0 and training:
+            self.repeats_regularizer(x, r)
         return x
 
     def compute_output_shape(
