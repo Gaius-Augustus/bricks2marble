@@ -18,6 +18,17 @@ ENCODING = np.array([
     [0, 0, 1, 0, 0, 1],
     [0, 0, 0, 1, 0, 1],
 ])
+ENCODING_NO_REPEATS = np.array([
+    [1, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0],
+    [0, 0, 1, 0, 0],
+    [0, 0, 0, 1, 0],
+    [0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0],
+    [0, 0, 1, 0, 0],
+    [0, 0, 0, 1, 0],
+])
 ENCODING_EXPANDED_REPEATS = np.array([
     [1, 0, 0, 0, 0, 0, 0, 0, 0],
     [0, 1, 0, 0, 0, 0, 0, 0, 0],
@@ -136,6 +147,22 @@ class Sequence:
                 self._end = self._sequence.size
             return self._end
 
+    def complement(self) -> "Sequence":
+        """Returns a new sequence object which is the complementary
+        strand to the current sequence. This will not reverse the order
+        of nucleotides.
+        """
+        seq = self._sequence.copy()
+        seq[seq < 4] = 3 - seq[seq < 4]
+        seq[seq > 4] = 13 - seq[seq > 4]
+        return Sequence(seq, name=self.name, start=self.start, end=self.end)
+
+    def is_repeat_masked(self) -> bool:
+        """Checks if the sequence has any repeat-masked positions and
+        returns a corresponding boolean.
+        """
+        return bool(np.any(self._sequence > 4))
+
     def segments(self) -> list[Segment]:
         return [
             Segment(
@@ -181,18 +208,26 @@ class Sequence:
             return ENCODING_EXPANDED_REPEATS[nuc]
         return ENCODING[nuc]
 
-    def resample(self, T: int, drop_remainder: bool = False) -> "Sequence":
+    def resample(
+        self,
+        T: int | None = None,
+        drop_remainder: bool = False,
+    ) -> "Sequence":
         """Resamples this sequence into chunks of the given length. This
         can lead to differently padded sequences.
 
         It does not create a new sequence but overrides this one.
 
         Args:
-            T (int): Length of the new chunks.
+            T (int, optional): Length of the new chunks. If not
+                specified, defaults to the total size of the sequence,
+                meaning one chunk only.
             drop_remainder (bool, optional): If set to True, deletes the
                 last chunk if the sequence has a length not divisable by
                 ``T``. Defaults to False.
         """
+        if T is None:
+            T = self.size
         if T <= 0:
             raise ValueError(f"Unallowed chunk size: {T}")
         if drop_remainder:
@@ -243,7 +278,7 @@ class Sequence:
             start=start,  # type: ignore
             end=end,
         )
-        return seq.resample(self.T)
+        return seq#.resample(self.T)
 
     def occurences(
         self,
@@ -309,6 +344,12 @@ class FASTA:
     def __init__(self, sequences: list[Sequence]) -> None:
         self._sequences = sequences
 
+    def is_repeat_masked(self) -> bool:
+        """Checks if the FASTA has any repeat-masked positions and
+        returns a corresponding boolean.
+        """
+        return any(seq.is_repeat_masked() for seq in self)
+
     @property
     def nuc(self) -> np.ndarray:
         """Sequences of encoded nucleotides of shape ``(N, T)``."""
@@ -357,7 +398,7 @@ class FASTA:
         self,
         sequences: np.ndarray | None = None,
         pad_index: int = 4,
-        expand_repeats: bool = False,
+        repeats: Literal["track", "expand", "omit"] = "track",
     ) -> np.ndarray:
         """Returns a one-hot encoded version of :meth:`FASTA.nuc` of
         shape ``(N, T, 6)``.
@@ -368,15 +409,20 @@ class FASTA:
             pad_index (int, optional): What to replace the padding
                 character (-1) by before encoding. Default to 4, which
                 is an `N`.
-            expand_repeats (bool, optional): If set to True, also
-                one-hot encodes repeat-masked positions and instead
-                returns an array of shape ``(N, T, 9)``. The default is
-                that repeat-masked positions are indicated as a flag in
-                the last dimension.
+            repeats (str, optional): Changes the way repeat-masked
+                positions are represented in the output. Can be either
+                "track", "expand" or "omit". Defaults to "track".
+                - "track": One additional dimension serves as a flag if
+                the position is repeat-masked or not.
+                - "expand": Four additional dimensions that are one-hot
+                encodings of the four possible lower-case letters.
+                - "omit": Do not include repeat information.
         """
-        nuc = self.nuc if sequences is None else sequences
+        nuc = self.nuc.copy() if sequences is None else sequences.copy()
         nuc[nuc == -1] = pad_index
-        if expand_repeats:
+        if repeats == "omit":
+            return ENCODING_NO_REPEATS[nuc]
+        if repeats == "expand":
             return ENCODING_EXPANDED_REPEATS[nuc]
         return ENCODING[nuc]
 
