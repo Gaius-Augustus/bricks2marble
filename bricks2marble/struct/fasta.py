@@ -18,6 +18,17 @@ ENCODING = np.array([
     [0, 0, 1, 0, 0, 1],
     [0, 0, 0, 1, 0, 1],
 ])
+ENCODING_NO_REPEATS = np.array([
+    [1, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0],
+    [0, 0, 1, 0, 0],
+    [0, 0, 0, 1, 0],
+    [0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0],
+    [0, 0, 1, 0, 0],
+    [0, 0, 0, 1, 0],
+])
 ENCODING_EXPANDED_REPEATS = np.array([
     [1, 0, 0, 0, 0, 0, 0, 0, 0],
     [0, 1, 0, 0, 0, 0, 0, 0, 0],
@@ -387,7 +398,7 @@ class FASTA:
         self,
         sequences: np.ndarray | None = None,
         pad_index: int = 4,
-        expand_repeats: bool = False,
+        repeats: Literal["track", "expand", "omit"] = "track",
     ) -> np.ndarray:
         """Returns a one-hot encoded version of :meth:`FASTA.nuc` of
         shape ``(N, T, 6)``.
@@ -398,15 +409,20 @@ class FASTA:
             pad_index (int, optional): What to replace the padding
                 character (-1) by before encoding. Default to 4, which
                 is an `N`.
-            expand_repeats (bool, optional): If set to True, also
-                one-hot encodes repeat-masked positions and instead
-                returns an array of shape ``(N, T, 9)``. The default is
-                that repeat-masked positions are indicated as a flag in
-                the last dimension.
+            repeats (str, optional): Changes the way repeat-masked
+                positions are represented in the output. Can be either
+                "track", "expand" or "omit". Defaults to "track".
+                - "track": One additional dimension serves as a flag if
+                the position is repeat-masked or not.
+                - "expand": Four additional dimensions that are one-hot
+                encodings of the four possible lower-case letters.
+                - "omit": Do not include repeat information.
         """
-        nuc = self.nuc if sequences is None else sequences
+        nuc = self.nuc.copy() if sequences is None else sequences.copy()
         nuc[nuc == -1] = pad_index
-        if expand_repeats:
+        if repeats == "omit":
+            return ENCODING_NO_REPEATS[nuc]
+        if repeats == "expand":
             return ENCODING_EXPANDED_REPEATS[nuc]
         return ENCODING[nuc]
 
