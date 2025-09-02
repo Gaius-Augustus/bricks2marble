@@ -2,9 +2,12 @@ import csv
 from collections import OrderedDict
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable, Literal
 
 from .transcript import FeatureType, GTFEntry, Transcript
+
+if TYPE_CHECKING:
+    from .fasta import FASTA
 
 
 class Gene:
@@ -12,6 +15,8 @@ class Gene:
 
     def __init__(self, id: str) -> None:
         self.id = id
+        self.seqname: str | None = None
+        self.strand: Literal["+", "-"] | None = None
         self.start = -1
         self.end = -1
         self._transcripts: OrderedDict[str, Transcript] = OrderedDict()
@@ -31,6 +36,8 @@ class Gene:
         if entry.feature == FeatureType.Gene:
             return
 
+        if self.seqname is None: self.seqname = entry.name
+        if self.strand is None: self.strand = entry.strand
         t_id = entry.attribute("transcript_id")
         if t_id not in self._transcripts:
             self._transcripts[t_id] = Transcript(t_id)
@@ -147,6 +154,55 @@ class Annotation:
         """
         for gene in self:
             gene.finalize(min_cds_length=min_cds_length)
+
+    def remove_wrong_transcripts(
+        self,
+        fasta: "FASTA",
+        start_codons: list[str] | None = None,
+        stop_codons: list[str] | None = None,
+    ) -> None:
+        """Removes all transcripts from this annotation that do not
+        start with one of the given start codons or do not end with
+        given stop codons.
+        Also removes all transcripts that are out-of-bounds for the
+        given FASTA.
+
+        Args:
+            fasta (FASTA): The corresponding fasta object to this
+                annotation.
+            start_codons (list[str], optional): A list of strings of
+                possible start codons. Defaults to only "ATG".
+            stop_codons (list[str], optional): A list of strings of
+                possible stop codons. Defaults to "TAG", "TAA" or "TGA".
+        """
+        from ..tools import check_annotation_boundaries
+        check_annotation_boundaries(
+            self, fasta,
+            start_codons=start_codons,
+            stop_codons=stop_codons,
+            remove=True,
+        )
+
+    def merge(self, annotation: "Annotation") -> None:
+        """Merges this annotation with the given."""
+        for ex_gene in annotation:
+            for gene in self:
+                if (
+                    gene.seqname == ex_gene.seqname
+                    and gene.strand == ex_gene.strand
+                    and gene.start == ex_gene.start
+                    and gene.end == ex_gene.end
+                ): break
+            else: # no break
+                for ex_tx in ex_gene:
+                    for entry in ex_tx.entries:
+                        g_id = entry.attribute("gene_id")
+                        t_id = entry.attribute("transcript_id")
+                        entry.attributes = (
+                            f"gene_id \"merged_{g_id}\"; "
+                            f"transcript_id \"merged_{t_id}\";"
+                        )
+                        self.add(entry)
 
     def to_list(self) -> list[GTFEntry]:
         """Returns a list of :class:`GTFEntry` objects."""

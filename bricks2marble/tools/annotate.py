@@ -176,9 +176,9 @@ def _annotation_from_dict(
         len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
         len_bwd = 0 if seq not in entries_bwd else len(entries_bwd[seq])
         while len_fwd + len_bwd > 0:
-            fwd = len_fwd > 0 or (
+            fwd = (len_fwd > 0 and len_bwd == 0) or (
                 len_fwd > 0 and len_bwd > 0 and
-                entries_fwd[seq][0][0].start >= entries_bwd[seq][0][0].start
+                entries_fwd[seq][0][0].start <= entries_bwd[seq][0][0].start
             )
             if fwd:
                 tx = entries_fwd[seq].pop(0)

@@ -136,6 +136,22 @@ class Sequence:
                 self._end = self._sequence.size
             return self._end
 
+    def complement(self) -> "Sequence":
+        """Returns a new sequence object which is the complementary
+        strand to the current sequence. This will not reverse the order
+        of nucleotides.
+        """
+        seq = self._sequence.copy()
+        seq[seq < 4] = 3 - seq[seq < 4]
+        seq[seq > 4] = 13 - seq[seq > 4]
+        return Sequence(seq, name=self.name, start=self.start, end=self.end)
+
+    def is_repeat_masked(self) -> bool:
+        """Checks if the sequence has any repeat-masked positions and
+        returns a corresponding boolean.
+        """
+        return bool(np.any(self._sequence > 4))
+
     def segments(self) -> list[Segment]:
         return [
             Segment(
@@ -181,18 +197,26 @@ class Sequence:
             return ENCODING_EXPANDED_REPEATS[nuc]
         return ENCODING[nuc]
 
-    def resample(self, T: int, drop_remainder: bool = False) -> "Sequence":
+    def resample(
+        self,
+        T: int | None = None,
+        drop_remainder: bool = False,
+    ) -> "Sequence":
         """Resamples this sequence into chunks of the given length. This
         can lead to differently padded sequences.
 
         It does not create a new sequence but overrides this one.
 
         Args:
-            T (int): Length of the new chunks.
+            T (int, optional): Length of the new chunks. If not
+                specified, defaults to the total size of the sequence,
+                meaning one chunk only.
             drop_remainder (bool, optional): If set to True, deletes the
                 last chunk if the sequence has a length not divisable by
                 ``T``. Defaults to False.
         """
+        if T is None:
+            T = self.size
         if T <= 0:
             raise ValueError(f"Unallowed chunk size: {T}")
         if drop_remainder:
@@ -243,7 +267,7 @@ class Sequence:
             start=start,  # type: ignore
             end=end,
         )
-        return seq.resample(self.T)
+        return seq#.resample(self.T)
 
     def occurences(
         self,
@@ -308,6 +332,12 @@ class FASTA:
 
     def __init__(self, sequences: list[Sequence]) -> None:
         self._sequences = sequences
+
+    def is_repeat_masked(self) -> bool:
+        """Checks if the FASTA has any repeat-masked positions and
+        returns a corresponding boolean.
+        """
+        return any(seq.is_repeat_masked() for seq in self)
 
     @property
     def nuc(self) -> np.ndarray:
