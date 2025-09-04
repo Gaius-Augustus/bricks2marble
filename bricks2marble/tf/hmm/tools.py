@@ -236,25 +236,60 @@ def get_nuc_emission_distribution(
 
 def state_transitions(
     isc: int = 1,
-    T_exon: int | None = None,
-    T_intron: int | None = None,
-    T_ir: int | None = None,
+    intron_chain_skips: bool = False,
+    p_IR: int | float | None = None,
+    p_intron: int | float | list[float | int] | None = None,
+    p_exon: int | float | None = None,
     heads: int = 1,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
-    if T_ir is None: T_ir = 10_000
-    if T_exon is None: T_exon = 250
+    """Generates a tuple of arrays ``(indices, values, share)`` for the
+    initialization of an HMM transitioner.
+
+    Args:
+        isc (int, optional): Number of intron states per frame  in the
+            transitioner. These states build an intron chain and model
+            the length of introns as a negative binomial distribution.
+            Defaults to 1.
+        intron_chain_skips (bool, optional): Whether additional outgoing
+            connections within each intron chain should be created. They
+            are shortcuts out of such a chain. Defaults to False.
+        p_IR (float, optional): The probability of staying in the IR
+            state or an integer > 1 as the expected length of an IR
+            region. Defaults to `0.9999`.
+        p_intron (float or list[float], optional): The probability of
+            staying in the intron state or an integer > 1 as the
+            expected length of an intron. For `isc > 1` this should be a
+            list of probabilities (or integers), one for each intron
+            state in the chain. Defaults to `0.99`.
+        p_exon (float, optional): The probability of moving between the
+            different exon states (or the expected length of an exon).
+            Defaults to `0.975`.
+        heads (int, optional): Number of heads of the HMM. This will
+            only copy the created transition arrays a number of times.
+            Defaults to 1.
+    """
+    if p_IR is None: p_IR = 0.9999
+    if p_exon is None: p_exon = 0.975
+    if p_intron is None: p_intron = [0.99] * isc
+    elif isinstance(p_intron, (float, int)): p_intron = [p_intron] * isc
+
+    if p_IR < 1: p_IR = 1 / (1-p_IR)
+    if p_exon < 1: p_exon = 1 / (1-p_exon)
+    for i in range(len(p_intron)):
+        if p_intron[i] < 1: p_intron[i] = 1 / (1-p_intron[i])
+
     indices = np.array([
         # IR -> IR -> START -> E1 -> STOP -> IR
-        [ 0,  0, np.log(T_ir - 1)],
+        [ 0,  0, np.log(p_IR - 1)],
         [ 0,  7, 0],
         [ 7,  5, 0],
         [ 5, 14, np.log(1/2)],
         [14,  0, 0],
 
         # E0 -> E1 -> E2 -> E0
-        [ 4,  5, np.log(T_exon - 1)],
-        [ 5,  6, np.log(T_exon - 1)],
-        [ 6,  4, np.log(T_exon - 1)],
+        [ 4,  5, np.log(p_exon - 1)],
+        [ 5,  6, np.log(p_exon - 1)],
+        [ 6,  4, np.log(p_exon - 1)],
 
         # Ek -> EIk
         [ 4,  8, 0],
@@ -266,6 +301,7 @@ def state_transitions(
         [12, 5, 0],
         [13, 6, 0],
     ])
+
     # intron loops
     intron_loops = np.array([
         # loops on intron states Ikj -> Ikj
@@ -281,10 +317,17 @@ def state_transitions(
         [ 9+3*(isc-1), 2],
         [10+3*(isc-1), 3],
     ])
-    intron_outgoing = np.array([
-        # outgoing edges Ikj -> IEk
-        [k+3*j, 10+k+3*(isc-1)] for j in range(isc) for k in range(1, 4)
-    ])
+    if intron_chain_skips:
+        intron_outgoing = np.array([
+            # outgoing edges Ikj -> IEk
+            [k+3*j, 10+k+3*(isc-1)] for j in range(isc) for k in range(1, 4)
+        ])
+    else:
+        intron_outgoing = np.array([
+            # outgoing edges Ik(-1) -> IEk
+            [k+3*(isc-1), 10+k+3*(isc-1)] for k in range(1, 4)
+        ])
+
     values = indices[:, 2].astype(np.float32)
     indices = indices[:, :2].astype(np.int64)
     if isc > 1:
@@ -336,24 +379,27 @@ def state_transitions(
         + [
             [n_edges+n_intron_loops+n_intron_edges+n_ingoing+k*3,
              n_edges+n_intron_loops+n_intron_edges+n_ingoing+(k+1)*3]
-            for k in range(isc)
+            for k in range(isc if intron_chain_skips else 1)
         ]
     )
     share = np.r_[*[
         share + i*(len(indices)//heads) for i in range(heads)
     ]]
 
-    if T_intron is not None:
-        intron_loop_values = [
-            np.log(T_intron / isc - 1) + np.random.normal(scale=1e-2)
-            for _ in range(isc)
-        ]
-    else:
-        intron_loop_values = np.log(10**np.arange(1, 1+isc) - 1).tolist()
+    intron_loop_values = [np.log(pi - 1) for pi in p_intron]
 
     values = np.r_[
         values,
-        np.array(intron_loop_values + [0] * (2 * isc))
+        np.array(
+            # loops on intron states
+            intron_loop_values
+            # edges between intron states
+            + ([np.log(1/2) if intron_chain_skips else 0] * (isc-1))
+            # ingoing edges
+            + [0]
+            # outgoing edges
+            + ([np.log(1/2)] * (isc-1) if intron_chain_skips else []) + [0]
+        )
     ]
     values = np.exp(values) / np.sum(np.exp(values), -1, keepdims=True)
     values = np.tile(values, heads)

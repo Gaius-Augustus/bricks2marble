@@ -24,10 +24,11 @@ class AnnotationHMMConfig(ModelConfig):
 
     emitter_sigmoid_activation: bool = False
 
-    initial_exon_len: int | None = None
-    initial_intron_len: int | None = None
-    initial_ir_len: int | None = None
     intron_state_chain: int = 1
+    intron_chain_skips: bool = False
+    initial_exon_len: int | float | None = None
+    initial_intron_len: int | float | list[float | int] | None = None
+    initial_ir_len: int | float | None = None
     train_transitions: bool = True
     train_start_dist: bool = True
     share_noncoding_params: bool = False
@@ -55,9 +56,10 @@ class AnnotationHMM(tf.keras.Layer):
 
         transitions, values, share = state_transitions(
             isc=self.config.intron_state_chain,
-            T_exon=self.config.initial_exon_len,
-            T_intron=self.config.initial_intron_len,
-            T_ir=self.config.initial_ir_len,
+            intron_chain_skips=self.config.intron_chain_skips,
+            p_IR=self.config.initial_ir_len,
+            p_intron=self.config.initial_intron_len,
+            p_exon=self.config.initial_exon_len,
             heads=self.config.heads,
         )
 
