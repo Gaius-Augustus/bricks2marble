@@ -49,7 +49,9 @@ def check_annotation_boundaries(
                 seq = fasta[seqname].string()
 
             if tx.end > len(seq):
-                out_of_range.append((gene.id, tx.id))
+                out_of_range.append(
+                    (gene.id, tx.id, tx.start, tx.end, tx.strand)
+                )
                 continue
 
             kmer = (
@@ -57,24 +59,28 @@ def check_annotation_boundaries(
                 else seq[tx.end-3:tx.end][::-1].translate(reverse)
             )
             if kmer.upper() not in start_codons:
-                wrong_start.append((gene.id, tx.id))
+                wrong_start.append(
+                    (gene.id, tx.id, tx.start, tx.end, tx.strand)
+                )
 
             kmer = (
                 seq[tx.end-3:tx.end] if tx.strand == "+"
                 else seq[tx.start:tx.start+3][::-1].translate(reverse)
             )
             if kmer.upper() not in stop_codons:
-                wrong_stop.append((gene.id, tx.id))
+                wrong_stop.append(
+                    (gene.id, tx.id, tx.start, tx.end, tx.strand)
+                )
 
     if remove:
-        for gid, tid in out_of_range:
+        for gid, tid, _, _, _ in out_of_range:
             annotation[gid]._transcripts.pop(tid)
-        for gid, tid in wrong_start:
+        for gid, tid, _, _, _ in wrong_start:
             try:
                 annotation[gid]._transcripts.pop(tid)
             except KeyError:
                 continue
-        for gid, tid in wrong_stop:
+        for gid, tid, _, _, _ in wrong_stop:
             try:
                 annotation[gid]._transcripts.pop(tid)
             except KeyError:
