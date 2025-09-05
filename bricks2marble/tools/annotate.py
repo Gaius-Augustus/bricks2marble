@@ -557,7 +557,7 @@ def _GTF_from_model_liberal(
         flush=True,
     )
 
-    for i in range(fasta.N):
+    for i in range(fasta.N-1):
         if len(repred_index) == 0:
             break
         if i == repred_index[0]:
@@ -571,6 +571,7 @@ def _GTF_from_model_liberal(
                     )
                 )
                 repred_fwd = repred_fwd[1:]  # type: ignore
+                if strand == 0: repred_bwd = repred_bwd[1:]  # type: ignore
             if strand == 1 or strand == 2:
                 labels_bwd[i], labels_bwd[i+1] = (  # type: ignore
                     _merge_replace_center(
@@ -580,6 +581,7 @@ def _GTF_from_model_liberal(
                     )
                 )
                 repred_bwd = repred_bwd[1:]  # type: ignore
+                if strand == 1: repred_fwd = repred_fwd[1:]  # type: ignore
             repred_index.pop(0)
 
     if verbose: print(
