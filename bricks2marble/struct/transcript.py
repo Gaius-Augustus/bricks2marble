@@ -55,12 +55,12 @@ class GTFEntry(Region):
         ]
 
     def attribute(self, key: str) -> str:
-        pattern = rf'\b{re.escape(key)}\s+"([^"]*)";'
+        pattern = rf'\b{re.escape(key)}\s+"([^"]*)"(?:;|$)'
         match = re.search(pattern, self.attributes)
         if match:
             return match.group(1).strip()
         raise AttributeError(
-            f"Attribute {key!r} not found in {self.feature!r}"
+            f"Attribute {key!r} not found in {self.feature!r} at {self.start}"
         )
 
     def same_as(
@@ -110,7 +110,6 @@ class Transcript:
         }
         self.start = -1
         self.end = -1
-        self.cds_len = -1
 
     def add(self, entry: GTFEntry) -> None:
         """Adds a :class:`GTFEntry` object to the transcript."""
@@ -198,27 +197,59 @@ class Transcript:
                 coords.append((entry.start, entry.end))
         return coords
 
-    def get_cds_len(self):
+    def at(self, position: int) -> FeatureType:
+        """Returns the type of feature at the given position in the
+        Transcript. Indexing follows Python convention.
+        """
+        if position < self.start or position >= self.end:
+            raise IndexError(
+                f"Position {position} is out of bounds for Transcript at "
+                f"[{self.start}, {self.end})."
+            )
+        types = []
+        for entry in self.entries:
+            if entry.start <= position < entry.end:
+                types.append(entry.feature)
+        if FeatureType.StartCodon in types:
+            types.remove(FeatureType.StartCodon)
+        if FeatureType.StopCodon in types:
+            types.remove(FeatureType.StopCodon)
+        if len(types) > 1:
+            if FeatureType.CDS in types:
+                return FeatureType.CDS
+            else:
+                raise RuntimeError(
+                    "Found contradicting feature types at position "
+                    f"{position}: {types}"
+                )
+        if len(types) == 1:
+            return types[0]
+        return FeatureType.Unknown
+
+    def cds_length(self) -> int:
+        """Returns the total length of all coding regions in the
+        transcript combined.
+        """
         cds = self.coords(FeatureType.CDS)
         return sum([c[1] - c[0] + 1 for c in cds])
 
-    def finalize(self, min_cds_length: int | None = None) -> bool:
-        """Cleans up the entries in the Transcript by adding missing
-        :class:`GTFEntry` objects.
+    def finalize(self) -> bool:
+        """Finishes building the transcript by adding missing introns
+        and start-/stop-codons. Also fixes the frames of the CDS by
+        forcing them to be 3 periodic.
 
-        Args:
-            min_cds_length (int, optional): Minimal length of coding
-                regions. If this transcript has a shorter coding region,
-                the method returns false. Defaults to no checks.
+        Raises a warning when there are no CDS and exon entries.
         """
-        if self.features[FeatureType.CDS]==self.features[FeatureType.Exon]==0:
+        if (
+            self.features[FeatureType.CDS]
+            == self.features[FeatureType.Exon]
+            == 0
+        ):
             warnings.warn(
                 f"There are no CDS or exon entries in transcript {self.id}."
             )
-        if min_cds_length is not None and self.get_cds_len() < min_cds_length:
-            return False
-        self.find_introns()
         self.fix_cds_frames()
+        self.find_introns()
         self.find_start_stop_codon()
         return True
 
@@ -244,6 +275,7 @@ class Transcript:
             intron = GTFEntry(**(exon_lst[i].model_dump() | {
                 "feature": FeatureType.Intron,
                 "start": exon_lst[i-1].end,
+                "end": exon_lst[i].start,
             }))
             self.add(intron)
 

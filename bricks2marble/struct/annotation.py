@@ -62,19 +62,43 @@ class Gene:
         for key in self._transcripts:
             self._transcripts[key].rename(name)
 
-    def finalize(self, min_cds_length: int | None = None) -> None:
-        """Add to all Transcript objects transcript, intron, CDS, exon
-        coordinates if they were not included in the gtf file.
+    def at(self, position: int) -> FeatureType:
+        """Returns the type of feature at the given position in the
+        Gene. Indexing follows Python convention.
+        """
+        if position < self.start or position >= self.end:
+            raise IndexError(
+                f"Position {position} is out of bounds for Gene at "
+                f"[{self.start}, {self.end})."
+            )
+        for transcript in self._transcripts.values():
+            if transcript.start <= position < transcript.end:
+                return transcript.at(position)
+        return FeatureType.Unknown
+
+    def finalize(self) -> None:
+        """Finalizes all transcripts."""
+        for k in self._transcripts:
+            self._transcripts[k].finalize()
+
+    def clean(self, min_cds_length: int | None = None) -> None:
+        """Removes any transcripts that do not meet the given
+        requirements.
 
         Args:
             min_cds_length (int, optional): Minimal length of coding
                 regions. All transcripts with a shorter coding region
                 will be deleted. Defaults to no checks for length.
         """
+        drop_tx = []
         for k in self._transcripts:
-            flag = self._transcripts[k].finalize(min_cds_length=min_cds_length)
-            if not flag:
-                self._transcripts.pop(k)
+            if (
+                min_cds_length is not None
+                and self._transcripts[k].cds_length() < min_cds_length
+            ):
+                drop_tx.append(k)
+        for k in drop_tx:
+            self._transcripts.pop(k)
 
     def to_list(self) -> list[GTFEntry]:
         if len(self._transcripts) == 0:
@@ -142,46 +166,83 @@ class Annotation:
         for key in self._genes:
             self._genes[key].rename(name)
 
-    def finalize(self, min_cds_length: int | None = None) -> None:
-        """Add to all Transcript objects transcript, intron, CDS, exon
-        coordinates if they were not included in the gtf file. Delete
-        all transripts that have no exons or CDS.
+    def finalize(self) -> None:
+        """Finalizes all transcripts in the annotation."""
+        for gene in self:
+            gene.finalize()
+
+    def clean(
+        self,
+        min_cds_length: int | None = None,
+        fasta: "FASTA | None" = None,
+        start_codons: list[str] | None = None,
+        stop_codons: list[str] | None = None,
+    ) -> None:
+        """Removes any transcripts that do not meet the given
+        requirements.
 
         Args:
             min_cds_length (int, optional): Minimal length of coding
                 regions. All transcripts with a shorter coding region
                 will be deleted. Defaults to no checks for length.
+            fasta (FASTA, optional): If a FASTA is given, all
+                transcripts are removed that do not start or end at
+                specific start-/stop-codons. Also removes any
+                out-of-bounds transcripts.
+            start_codons (list[str], optional): A list of strings of
+                possible start codons. Only used if `fasta` is given.
+                Defaults to only "ATG".
+            stop_codons (list[str], optional): A list of strings of
+                possible stop codons. Only used if `fasta` is given.
+                Defaults to "TAG", "TAA" or "TGA".
         """
+        if fasta is not None:
+            from ..tools import check_annotation_boundaries
+            check_annotation_boundaries(
+                self, fasta,
+                start_codons=start_codons,
+                stop_codons=stop_codons,
+                remove=True,
+            )
         for gene in self:
-            gene.finalize(min_cds_length=min_cds_length)
+            gene.clean(min_cds_length=min_cds_length)
 
-    def remove_wrong_transcripts(
+    def at(
         self,
-        fasta: "FASTA",
-        start_codons: list[str] | None = None,
-        stop_codons: list[str] | None = None,
-    ) -> None:
-        """Removes all transcripts from this annotation that do not
-        start with one of the given start codons or do not end with
-        given stop codons.
-        Also removes all transcripts that are out-of-bounds for the
-        given FASTA.
+        position: int,
+    ) -> tuple[FeatureType | None, FeatureType | None]:
+        """Returns the type of label at the given position. Can be used
+        to determine whether a position is coding or non-coding.
 
         Args:
-            fasta (FASTA): The corresponding fasta object to this
-                annotation.
-            start_codons (list[str], optional): A list of strings of
-                possible start codons. Defaults to only "ATG".
-            stop_codons (list[str], optional): A list of strings of
-                possible stop codons. Defaults to "TAG", "TAA" or "TGA".
+            position (int): The position to identify. Indexing starts at
+                0, and the last position is exclusive, following Python
+                indexing.
+
+        Returns:
+            tuple: Two feature types for the forward and backward
+            strand.
         """
-        from ..tools import check_annotation_boundaries
-        check_annotation_boundaries(
-            self, fasta,
-            start_codons=start_codons,
-            stop_codons=stop_codons,
-            remove=True,
-        )
+        fwd = None
+        bwd = None
+        for gene in self:
+            if fwd is not None and bwd is not None: break
+            if gene.start <= position < gene.end:
+                if gene.strand == "+": fwd = gene.at(position)
+                if gene.strand == "-": bwd = gene.at(position)
+        return fwd, bwd
+
+    def select(self, sequence: str) -> None:
+        """Only select the sequence with the given name and drop
+        everything else.
+        """
+        drop_keys = []
+        for gid in self._genes:
+            if self._genes[gid].seqname != sequence:
+                drop_keys.append(gid)
+
+        for gid in drop_keys:
+            self._genes.pop(gid)
 
     def merge(self, annotation: "Annotation") -> None:
         """Merges this annotation with the given."""
