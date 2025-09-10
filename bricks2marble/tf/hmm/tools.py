@@ -237,6 +237,7 @@ def get_nuc_emission_distribution(
 def state_transitions(
     isc: int = 1,
     intron_chain_skips: bool = False,
+    intron_chain_loop: bool = False,
     p_IR: int | float | None = None,
     p_intron: int | float | list[float | int] | None = None,
     p_exon: int | float | None = None,
@@ -327,6 +328,10 @@ def state_transitions(
             # outgoing edges Ik(-1) -> IEk
             [k+3*(isc-1), 10+k+3*(isc-1)] for k in range(1, 4)
         ])
+    if intron_chain_loop:
+        intron_repeat = np.array([
+            [k+3*(isc-1), k] for k in range(1, 4)
+        ])
 
     values = indices[:, 2].astype(np.float32)
     indices = indices[:, :2].astype(np.int64)
@@ -348,6 +353,8 @@ def state_transitions(
             intron_ingoing,
             intron_outgoing,
         ]
+    if intron_chain_loop:
+        indices = np.r_[indices, intron_repeat]
 
     repeats = np.arange(heads).reshape(heads, 1, 1)
     repeats = np.tile(repeats, (1, len(indices), 1))
@@ -358,6 +365,7 @@ def state_transitions(
     n_intron_loops = len(intron_loops)
     n_intron_edges = len(intron_edges)
     n_ingoing = len(intron_ingoing)
+    n_outgoing = len(intron_outgoing)
     share = np.array(
         # loops on intron states
         [
@@ -381,6 +389,11 @@ def state_transitions(
              n_edges+n_intron_loops+n_intron_edges+n_ingoing+(k+1)*3]
             for k in range(isc if intron_chain_skips else 1)
         ]
+        # chain loop edges
+        + ([
+            [n_edges+n_intron_loops+n_intron_edges+n_ingoing+n_outgoing,
+             n_edges+n_intron_loops+n_intron_edges+n_ingoing+n_outgoing+3]
+        ] if intron_chain_loop else [])
     )
     share = np.r_[*[
         share + i*(len(indices)//heads) for i in range(heads)
@@ -398,7 +411,11 @@ def state_transitions(
             # ingoing edges
             + [0]
             # outgoing edges
-            + ([np.log(1/2)] * (isc-1) if intron_chain_skips else []) + [0]
+            + ([np.log(1/2)] * (isc-1) if intron_chain_skips else []) + [
+                np.log(1/2) if intron_chain_loop else 0
+            ]
+            # chain loop edges
+            + ([np.log(1/2)] if intron_chain_loop else [])
         )
     ]
     values = np.exp(values) / np.sum(np.exp(values), -1, keepdims=True)

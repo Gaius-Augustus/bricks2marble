@@ -26,6 +26,7 @@ class AnnotationHMMConfig(ModelConfig):
 
     intron_state_chain: int = 1
     intron_chain_skips: bool = False
+    intron_chain_loop: bool = False
     initial_exon_len: int | float | None = None
     initial_intron_len: int | float | list[float | int] | None = None
     initial_ir_len: int | float | None = None
@@ -57,6 +58,7 @@ class AnnotationHMM(tf.keras.Layer):
         transitions, values, share = state_transitions(
             isc=self.config.intron_state_chain,
             intron_chain_skips=self.config.intron_chain_skips,
+            intron_chain_loop=self.config.intron_chain_loop,
             p_IR=self.config.initial_ir_len,
             p_intron=self.config.initial_intron_len,
             p_exon=self.config.initial_exon_len,
