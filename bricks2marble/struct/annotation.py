@@ -175,8 +175,10 @@ class Annotation:
         self,
         min_cds_length: int | None = None,
         fasta: "FASTA | None" = None,
-        start_codons: list[str] | None = None,
-        stop_codons: list[str] | None = None,
+        start_codons: list[str] | bool = True,
+        stop_codons: list[str] | bool = True,
+        intron_begin: list[str] | bool = True,
+        intron_end: list[str] | bool = True,
     ) -> None:
         """Removes any transcripts that do not meet the given
         requirements.
@@ -190,11 +192,21 @@ class Annotation:
                 specific start-/stop-codons. Also removes any
                 out-of-bounds transcripts.
             start_codons (list[str], optional): A list of strings of
-                possible start codons. Only used if `fasta` is given.
-                Defaults to only "ATG".
+                possible start codons or a boolean value. If true,
+                defaults to only "ATG" and if false, does no checks for
+                start codons.
             stop_codons (list[str], optional): A list of strings of
-                possible stop codons. Only used if `fasta` is given.
-                Defaults to "TAG", "TAA" or "TGA".
+                possible stop codons or a boolean value. If true,
+                defaults to "TAG", "TAA" or "TGA" and if false, does no
+                checks for stop codons.
+            intron_begin (list[str], optional): A list of strings of
+                possible begin patterns of introns, or a boolean value.
+                If true, defaults to only "GT" and if false, does no
+                checks for begin patterns.
+            intron_end (list[str], optional): A list of strings of
+                possible end patterns of introns, or a boolean value. If
+                true, defaults to only "AG" and if false, does no checks
+                for end patterns.
         """
         if fasta is not None:
             from ..tools import check_annotation_boundaries
@@ -202,6 +214,8 @@ class Annotation:
                 self, fasta,
                 start_codons=start_codons,
                 stop_codons=stop_codons,
+                intron_begin=intron_begin,
+                intron_end=intron_end,
                 remove=True,
             )
         for gene in self:
