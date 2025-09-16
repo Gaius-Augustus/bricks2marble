@@ -175,10 +175,12 @@ class Annotation:
         self,
         min_cds_length: int | None = None,
         fasta: "FASTA | None" = None,
+        boundaries: bool = False,
         start_codons: list[str] | bool = True,
         stop_codons: list[str] | bool = True,
         intron_begin: list[str] | bool = True,
         intron_end: list[str] | bool = True,
+        no_repeats: bool = False,
     ) -> None:
         """Removes any transcripts that do not meet the given
         requirements.
@@ -208,8 +210,12 @@ class Annotation:
                 true, defaults to only "AG" and if false, does no checks
                 for end patterns.
         """
-        if fasta is not None:
-            from ..tools import check_annotation_boundaries
+        if boundaries:
+            if fasta is None:
+                raise ValueError(
+                    "If boundaries is True, a FASTA object has to be given."
+                )
+            from ..tools.post import check_annotation_boundaries
             check_annotation_boundaries(
                 self, fasta,
                 start_codons=start_codons,
@@ -218,6 +224,13 @@ class Annotation:
                 intron_end=intron_end,
                 remove=True,
             )
+        if no_repeats:
+            if fasta is None:
+                raise ValueError(
+                    "If no_repeats is True, a FASTA object has to be given."
+                )
+            from ..tools.post import check_repeat_masked
+            check_repeat_masked(self, fasta, remove=True)
         for gene in self:
             gene.clean(min_cds_length=min_cds_length)
 
@@ -246,17 +259,46 @@ class Annotation:
                 if gene.strand == "-": bwd = gene.at(position)
         return fwd, bwd
 
-    def select(self, sequence: str) -> None:
-        """Only select the sequence with the given name and drop
-        everything else.
-        """
-        drop_keys = []
-        for gid in self._genes:
-            if self._genes[gid].seqname != sequence:
-                drop_keys.append(gid)
+    def select(
+        self,
+        sequence: str | None = None,
+        start: int | None = None,
+        end: int | None = None,
+    ) -> None:
+        """Select only specific transcripts from the annotation. Changes
+        the annotation in-place.
 
-        for gid in drop_keys:
-            self._genes.pop(gid)
+        Args:
+            sequence (str, optional): Select only transcripts with the
+                given name.
+            start (int, optional): Select only transcripts that are
+                starting at or after the given position.
+            end (int, optional): Select only transcripts that are
+                ending strictly before the given position.
+        """
+        if sequence is not None:
+            drop_keys = []
+            for gid in self._genes:
+                if self._genes[gid].seqname != sequence:
+                    drop_keys.append(gid)
+            for gid in drop_keys:
+                self._genes.pop(gid)
+
+        if start is not None:
+            drop_keys = []
+            for gid in self._genes:
+                if self._genes[gid].start < start:
+                    drop_keys.append(gid)
+            for gid in drop_keys:
+                self._genes.pop(gid)
+
+        if end is not None:
+            drop_keys = []
+            for gid in self._genes:
+                if self._genes[gid].end >= end:
+                    drop_keys.append(gid)
+            for gid in drop_keys:
+                self._genes.pop(gid)
 
     def merge(self, annotation: "Annotation") -> None:
         """Merges this annotation with the given."""

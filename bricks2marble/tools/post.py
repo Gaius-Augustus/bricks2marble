@@ -140,3 +140,23 @@ def check_annotation_boundaries(
                 continue
 
     return wrong_start, wrong_stop, wrong_begin, wrong_end, out_of_range
+
+
+def check_repeat_masked(
+    annotation: "Annotation",
+    fasta: "FASTA",
+    remove: bool = False,
+) -> list[tuple]:
+    repeats = []
+    for gene in annotation:
+        for tx in gene:
+            if fasta[
+                tx.seqname
+            ].positions(tx.start, tx.end).is_repeat_masked():
+                repeats.append(
+                    (tx.gene_id, tx.id, tx.start, tx.end, tx.strand)
+                )
+    if remove:
+        for gid, tid, _, _, _ in repeats:
+            annotation[gid]._transcripts.pop(tid)
+    return repeats
