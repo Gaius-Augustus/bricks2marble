@@ -19,6 +19,7 @@ class AnnotationHMMConfig(ModelConfig):
 
     heads: int = 1
     dropout_heads: float = 0
+    compute_heads_sequentially: bool = False
     use_reverse_strand: bool = False
     parallel_factor: int = 1
 
@@ -50,59 +51,71 @@ class AnnotationHMM(tf.keras.Layer):
         super().__init__()
         self.config = AnnotationHMMConfig(**kwargs)
 
-        self.hmm = TFHMM(
-            states=self.config.n_states,
-            heads=self.config.heads,
-        )
+        heads = (1 if self.config.compute_heads_sequentially
+                 else self.config.heads)
 
-        transitions, values, share = state_transitions(
+        transitions, values_transitions, share_transitions = state_transitions(
             isc=self.config.intron_state_chain,
             intron_chain_skips=self.config.intron_chain_skips,
             intron_chain_loop=self.config.intron_chain_loop,
             p_IR=self.config.initial_ir_len,
             p_intron=self.config.initial_intron_len,
             p_exon=self.config.initial_exon_len,
-            heads=self.config.heads,
+            heads=heads,
         )
-
-        self.hmm.transitioner.allow = transitions
-        self.hmm.transitioner.share = share
-        self.hmm.transitioner.initializer = values
-
-        starts, values, share = state_start_dist(
+        starts, values_starts, share_starts = state_start_dist(
             isc=self.config.intron_state_chain,
-            heads=self.config.heads,
+            heads=heads,
         )
-
-        self.hmm.transitioner.allow_start = starts
-        self.hmm.transitioner.share_start = share
-        self.hmm.transitioner.initializer_start = values
-
-        if self.config.emitter_sigmoid_activation:
-            stream_emitter = TFBernoulliEmitter()
-        else:
-            stream_emitter = TFCategoricalEmitter()
-
-        nuc_emitter_left = TFCategoricalEmitter()
-        nuc_emitter_right = TFCategoricalEmitter()
-
         emissions_left, emissions_right = get_nuc_emission_distribution(
             start_codons=self.config.start_codons,
             stop_codons=self.config.stop_codons,
             intron_begin_pattern=self.config.intron_begin_pattern,
             intron_end_pattern=self.config.intron_end_pattern,
             intron_state_chain=self.config.intron_state_chain,
-            heads=self.config.heads,
+            heads=heads,
         )
 
-        nuc_emitter_left.initializer = emissions_left.flatten()
-        nuc_emitter_left.trainable = False
-        nuc_emitter_right.initializer = emissions_right.flatten()
-        nuc_emitter_right.trainable = False
+        nhmms = 1
+        if self.config.compute_heads_sequentially:
+            nhmms = self.config.heads
+            self.hmm = []
 
-        self.hmm.add_emitter(stream_emitter)
-        self.hmm.add_emitter(nuc_emitter_left)
-        self.hmm.add_emitter(nuc_emitter_right)
+        for _ in range(nhmms):
+            hmm = TFHMM(
+                states=self.config.n_states,
+                heads=heads,
+            )
+
+            hmm.transitioner.allow = transitions
+            hmm.transitioner.share = share_transitions
+            hmm.transitioner.initializer = values_transitions
+
+            hmm.transitioner.allow_start = starts
+            hmm.transitioner.share_start = share_starts
+            hmm.transitioner.initializer_start = values_starts
+
+            if self.config.emitter_sigmoid_activation:
+                stream_emitter = TFBernoulliEmitter()
+            else:
+                stream_emitter = TFCategoricalEmitter()
+
+            nuc_emitter_left = TFCategoricalEmitter()
+            nuc_emitter_right = TFCategoricalEmitter()
+
+            nuc_emitter_left.initializer = emissions_left.flatten()
+            nuc_emitter_left.trainable = False
+            nuc_emitter_right.initializer = emissions_right.flatten()
+            nuc_emitter_right.trainable = False
+
+            hmm.add_emitter(stream_emitter)
+            hmm.add_emitter(nuc_emitter_left)
+            hmm.add_emitter(nuc_emitter_right)
+
+            if self.config.compute_heads_sequentially:
+                self.hmm.append(hmm)
+            else:
+                self.hmm = hmm
 
         if self.config.nudge_IR > 0:
             self.regularizer = UncertainPredictionRegularizer(
@@ -121,38 +134,41 @@ class AnnotationHMM(tf.keras.Layer):
     def build(self, input_shape: tuple[int | None, ...]) -> None:
         D: int = input_shape[-1]  # type: ignore
         S = self.config.n_states
-        H = self.config.heads
+        H = 1 if self.config.compute_heads_sequentially else self.config.heads
         isc = self.config.intron_state_chain
-        self.hmm.emitter[0].allow = [
-            (h, i, k)
-            for h, states in enumerate([S]*H)
-            for k in range(D)
-            for i in range(states)
-        ]
-        self.hmm.emitter[0].share = ([
-            (h*D*S+i*S+1+j*3, h*D*S+i*S+4+j*3)
-            for h in range(H)
-            for i in range(D)
-            for j in range(isc)
-        ] if not self.config.share_noncoding_params else [
-            (h*D*S+i*S, h*D*S+i*S+1+isc*3)
-            for h in range(H)
-            for i in range(D)
-        ]) + [
-            (h*D*S+i*S+5+3*isc, h*D*S+i*S+8+3*isc)
-            for h in range(H)
-            for i in range(D)
-        ] + [
-            (h*D*S+i*S+8+3*isc, h*D*S+i*S+11+3*isc)
-            for h in range(H)
-            for i in range(D)
-        ]
-        self.hmm.emitter[0].initializer = tf.initializers.GlorotNormal()
-        self.hmm.build((
-            input_shape,
-            input_shape[:-1] + (65, ),
-            input_shape[:-1] + (65, ),
-        ))
+        for hmm in (
+            self.hmm if self.config.compute_heads_sequentially else [self.hmm]
+        ):
+            hmm.emitter[0].allow = [
+                (h, i, k)
+                for h, states in enumerate([S]*H)
+                for k in range(D)
+                for i in range(states)
+            ]
+            hmm.emitter[0].share = ([
+                (h*D*S+i*S+1+j*3, h*D*S+i*S+4+j*3)
+                for h in range(H)
+                for i in range(D)
+                for j in range(isc)
+            ] if not self.config.share_noncoding_params else [
+                (h*D*S+i*S, h*D*S+i*S+1+isc*3)
+                for h in range(H)
+                for i in range(D)
+            ]) + [
+                (h*D*S+i*S+5+3*isc, h*D*S+i*S+8+3*isc)
+                for h in range(H)
+                for i in range(D)
+            ] + [
+                (h*D*S+i*S+8+3*isc, h*D*S+i*S+11+3*isc)
+                for h in range(H)
+                for i in range(D)
+            ]
+            hmm.emitter[0].initializer = tf.initializers.GlorotNormal()
+            hmm.build((
+                input_shape,
+                input_shape[:-1] + (65, ),
+                input_shape[:-1] + (65, ),
+            ))
 
     def state_names(self) -> list[str]:
         return state_names(self.config.intron_state_chain)
@@ -222,6 +238,35 @@ class AnnotationHMM(tf.keras.Layer):
         mode: HMMMode = HMMMode.POSTERIOR,
         parallel: int = 1,
     ) -> tf.Tensor:
+        if self.config.compute_heads_sequentially:
+            if self.config.use_reverse_strand:
+                B = tf.shape(x)[0] // 2
+                return tf.concat([
+                    tf.concat([
+                        hmm(
+                            x[:B],
+                            nuc_left[:B],
+                            nuc_right[:B],
+                            mode=mode,
+                            parallel=parallel,
+                        )
+                        for hmm in self.hmm
+                    ], axis=2),
+                    tf.concat([
+                        hmm(
+                            x[B:],
+                            nuc_left[B:],
+                            nuc_right[B:],
+                            mode=mode,
+                            parallel=parallel,
+                        )
+                        for hmm in self.hmm
+                    ], axis=2),
+                ], axis=0)  # type: ignore
+            return tf.concat([
+                hmm(x, nuc_left, nuc_right, mode=mode, parallel=parallel)
+                for hmm in self.hmm
+            ], axis=2)  # type: ignore
         return self.hmm(
             x, nuc_left, nuc_right,
             mode=mode,
