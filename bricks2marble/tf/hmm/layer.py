@@ -1,16 +1,14 @@
 import tensorflow as tf
-from learnMSA.msa_hmm.MaximumExpectedAccuracy import maximum_expected_accuracy
-from learnMSA.msa_hmm.MsaHmmCell import HmmCell
-from learnMSA.msa_hmm.MsaHmmLayer import MsaHmmLayer as HmmLayer
-from learnMSA.msa_hmm.Viterbi import viterbi
+from hidten import HMMMode
+from hidten.config import ModelConfig, with_config
+from hidten.tf import TFHMM, TFBernoulliEmitter, TFCategoricalEmitter
 
-from ..config import ModelConfig, with_config
-from ..util import UncertainPredictionRegularizer
-from .emitter import Emitter
-from .transitioner import Transitioner
+from ..loss import RepeatsNonCodingRegularizer, UncertainPredictionRegularizer
+from .tools import (get_nuc_emission_distribution, left_right_3mers,
+                    state_names, state_start_dist, state_transitions)
 
 
-class HMMLayerConfig(ModelConfig):
+class AnnotationHMMConfig(ModelConfig):
 
     start_codons: list[tuple[str, float]] = [("ATG", 1.)]
     stop_codons: list[tuple[str, float]] = [
@@ -20,209 +18,276 @@ class HMMLayerConfig(ModelConfig):
     intron_end_pattern: list[tuple[str, float]] = [("AGN", 1.)]
 
     heads: int = 1
+    dropout_heads: float = 0
+    compute_heads_sequentially: bool = False
     use_reverse_strand: bool = False
     parallel_factor: int = 1
 
     emitter_sigmoid_activation: bool = False
 
-    initial_exon_len: int | None = None
-    initial_intron_len: int | None = None
-    initial_ir_len: int | None = None
     intron_state_chain: int = 1
+    intron_chain_skips: bool = False
+    intron_chain_loop: bool = False
+    initial_exon_len: int | float | None = None
+    initial_intron_len: int | float | list[float | int] | None = None
+    initial_ir_len: int | float | None = None
     train_transitions: bool = True
     train_start_dist: bool = True
     share_noncoding_params: bool = False
     nudge_IR: float = 0.0
+    nudge_repeats_noncoding: float = 0.0
 
     @property
     def n_states(self) -> int:
         return 12 + 3*self.intron_state_chain
 
+    model_config = {"frozen": True, "extra": "forbid"}
 
-@with_config(HMMLayerConfig)
-class HMMLayer(HmmLayer):
 
-    config: HMMLayerConfig
+@with_config(AnnotationHMMConfig)
+class AnnotationHMM(tf.keras.Layer):
 
-    def post_config_init(self) -> None:
-        super().__init__(
-            cell=None,
-            num_seqs=None,
-            use_prior=False,
-            parallel_factor=self.config.parallel_factor,
+    def __init__(self, **kwargs) -> None:
+        super().__init__()
+        self.config = AnnotationHMMConfig(**kwargs)
+
+        heads = (1 if self.config.compute_heads_sequentially
+                 else self.config.heads)
+
+        transitions, values_transitions, share_transitions = state_transitions(
+            isc=self.config.intron_state_chain,
+            intron_chain_skips=self.config.intron_chain_skips,
+            intron_chain_loop=self.config.intron_chain_loop,
+            p_IR=self.config.initial_ir_len,
+            p_intron=self.config.initial_intron_len,
+            p_exon=self.config.initial_exon_len,
+            heads=heads,
         )
-
-    def build(self, input_shape: tuple[int | None, ...]) -> None:
-        emitter = Emitter(
+        starts, values_starts, share_starts = state_start_dist(
+            isc=self.config.intron_state_chain,
+            heads=heads,
+        )
+        emissions_left, emissions_right = get_nuc_emission_distribution(
             start_codons=self.config.start_codons,
             stop_codons=self.config.stop_codons,
             intron_begin_pattern=self.config.intron_begin_pattern,
             intron_end_pattern=self.config.intron_end_pattern,
-            heads=self.config.heads,
-            use_reverse_strand=self.config.use_reverse_strand,
-            share_noncoding_params=self.config.share_noncoding_params,
             intron_state_chain=self.config.intron_state_chain,
-            sigmoid_activation=self.config.emitter_sigmoid_activation,
+            heads=heads,
         )
-        transitioner = Transitioner(
-            heads=self.config.heads,
-            initial_exon_len=self.config.initial_exon_len,
-            initial_intron_len=self.config.initial_intron_len,
-            initial_ir_len=self.config.initial_ir_len,
-            starting_distribution_trainable=self.config.train_start_dist,
-            transitions_trainable=self.config.train_transitions,
-            intron_state_chain=self.config.intron_state_chain,
-        )
+
+        nhmms = 1
+        if self.config.compute_heads_sequentially:
+            nhmms = self.config.heads
+            self.hmm = []
+
+        for _ in range(nhmms):
+            hmm = TFHMM(
+                states=self.config.n_states,
+                heads=heads,
+            )
+
+            hmm.transitioner.allow = transitions
+            hmm.transitioner.share = share_transitions
+            hmm.transitioner.initializer = values_transitions
+
+            hmm.transitioner.allow_start = starts
+            hmm.transitioner.share_start = share_starts
+            hmm.transitioner.initializer_start = values_starts
+
+            if self.config.emitter_sigmoid_activation:
+                stream_emitter = TFBernoulliEmitter()
+            else:
+                stream_emitter = TFCategoricalEmitter()
+
+            nuc_emitter_left = TFCategoricalEmitter()
+            nuc_emitter_right = TFCategoricalEmitter()
+
+            nuc_emitter_left.initializer = emissions_left.flatten()
+            nuc_emitter_left.trainable = False
+            nuc_emitter_right.initializer = emissions_right.flatten()
+            nuc_emitter_right.trainable = False
+
+            hmm.add_emitter(stream_emitter)
+            hmm.add_emitter(nuc_emitter_left)
+            hmm.add_emitter(nuc_emitter_right)
+
+            if self.config.compute_heads_sequentially:
+                self.hmm.append(hmm)
+            else:
+                self.hmm = hmm
+
         if self.config.nudge_IR > 0:
             self.regularizer = UncertainPredictionRegularizer(
                 weight=self.config.nudge_IR,
                 class_index=0,
             )
+        if self.config.nudge_repeats_noncoding > 0:
+            self.repeats_regularizer = RepeatsNonCodingRegularizer(
+                weight=self.config.nudge_repeats_noncoding,
+                use_reverse_strand=self.config.use_reverse_strand,
+                non_coding_start_index=1+3*self.config.intron_state_chain,
+            )
+        if self.config.dropout_heads > 0:
+            self.dropout = tf.keras.layers.Dropout(self.config.dropout_heads)
 
-        self.cell = HmmCell(
-            [emitter.config.n_states] * (self.config.heads),
-            dim=input_shape[-1],
-            emitter=emitter,
-            transitioner=transitioner,
-            use_fake_step_counter=True,
-            name="gene_pred_hmm_cell",
-        )
-        super().build(input_shape)
+    def build(self, input_shape: tuple[int | None, ...]) -> None:
+        D: int = input_shape[-1]  # type: ignore
+        S = self.config.n_states
+        H = 1 if self.config.compute_heads_sequentially else self.config.heads
+        isc = self.config.intron_state_chain
+        for hmm in (
+            self.hmm if self.config.compute_heads_sequentially else [self.hmm]
+        ):
+            hmm.emitter[0].allow = [
+                (h, i, k)
+                for h, states in enumerate([S]*H)
+                for k in range(D)
+                for i in range(states)
+            ]
+            hmm.emitter[0].share = ([
+                (h*D*S+i*S+1+j*3, h*D*S+i*S+4+j*3)
+                for h in range(H)
+                for i in range(D)
+                for j in range(isc)
+            ] if not self.config.share_noncoding_params else [
+                (h*D*S+i*S, h*D*S+i*S+1+isc*3)
+                for h in range(H)
+                for i in range(D)
+            ]) + [
+                (h*D*S+i*S+5+3*isc, h*D*S+i*S+8+3*isc)
+                for h in range(H)
+                for i in range(D)
+            ] + [
+                (h*D*S+i*S+8+3*isc, h*D*S+i*S+11+3*isc)
+                for h in range(H)
+                for i in range(D)
+            ]
+            hmm.emitter[0].initializer = tf.initializers.GlorotNormal()
+            hmm.build((
+                input_shape,
+                input_shape[:-1] + (65, ),
+                input_shape[:-1] + (65, ),
+            ))
 
-    def prepare_input(self, x: tf.Tensor, nuc: tf.Tensor) -> tf.Tensor:
-        if self.config.use_reverse_strand:
-            B, T, D = tf.unstack(tf.shape(nuc))  # type: ignore
-            nuc = tf.expand_dims(nuc, 0)
-            nuc_reverse = tf.gather(nuc, [3, 2, 1, 0, 4], axis=-1)
-            nuc_reverse = tf.reverse(nuc_reverse, [-2])
-            nuc = tf.concat((nuc, nuc_reverse), axis=0)  # type: ignore
-            nuc = tf.reshape(nuc, (1, 2*B, T, D))
-            x = tf.expand_dims(x, 0)
-            x = tf.concat((x, tf.reverse(x, [-2])), axis=0)  # type: ignore
-            x = tf.reshape(x, (1, 2*B, T, -1))
-        else:
-            nuc = tf.expand_dims(nuc, 0)
-            x = tf.expand_dims(x, 0)
-        x = tf.concat((x, nuc), axis=-1)  # type: ignore
-        return x
+    def state_names(self) -> list[str]:
+        return state_names(self.config.intron_state_chain)
 
-    def call(
+    def preprocess(
         self,
         x: tf.Tensor,
         nuc: tf.Tensor,
-        training: bool = False,
-        use_loglik: bool = True,
-    ) -> tf.Tensor:
-        x = self.prepare_input(x, nuc)
-
-        x, _, _ = self.state_posterior_log_probs(
-            x,
-            return_prior=True,
-            training=training,
-            no_loglik=not use_loglik,
-        )  # type: ignore
-        x = tf.transpose(x, [1, 2, 0, 3])
-
+    ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor | None]:
+        if self.config.nudge_repeats_noncoding > 0:
+            r = nuc[..., 5:6]
+            nuc = nuc[..., :5]
         if self.config.use_reverse_strand:
-            # 2*B, T, H, D
+            nuc_reverse = tf.gather(nuc, [3, 2, 1, 0, 4], axis=-1)
+            nuc_reverse = tf.reverse(nuc_reverse, [-2])
+            nuc = tf.concat((nuc, nuc_reverse), axis=0)  # type: ignore
+            x = tf.concat((x, tf.reverse(x, [-2])), axis=0)  # type: ignore
+        if self.config.nudge_repeats_noncoding > 0:
+            return x, nuc, r
+        return x, nuc, None
+
+    def postprocess(
+        self,
+        x: tf.Tensor,
+        mode: HMMMode = HMMMode.POSTERIOR,
+        training: bool = False,
+    ) -> tf.Tensor:
+        """If `use_reverse_strand` is active, the resulting tensor ``x``
+        will be of shape ``(B, T, 2*H)`` or ``(B, T, 2*H, D)``, where
+        ``x[:, :, :H, ...]`` is the output of the forward strand and
+        ``x[:, :, H:, ...]`` is the output of the backward strand.
+        However, both series are pointing in the same direction.
+        """
+        if self.config.use_reverse_strand:
+            # 2*B, T, H(, D)
             x = tf.reshape(x, tf.concat((
                 (2, ),
                 (tf.shape(x)[0]//2, ),  # type: ignore
                 tf.shape(x)[1:]  # type: ignore
             ), 0))
-            # 2, B, T, H, D
+            # 2, B, T, H(, D)
             x = tf.concat(
-                (x[0:1], tf.reverse(x[1:2], [-3])  # type: ignore
+                (x[0:1], tf.reverse(x[1:2], [2])  # type: ignore
             ), 0)
-            x = tf.transpose(x, [1, 2, 0, 3, 4])
-            # B, T, 2, H, D
+            x = tf.keras.ops.moveaxis(x, 0, 2)  # type: ignore
+            # B, T, 2, H(, D)
             x = tf.reshape(x, tf.concat((
                 tf.shape(x)[:2],  # type: ignore
                 (tf.shape(x)[2]*tf.shape(x)[3], ),  # type: ignore
                 tf.shape(x)[4:],  # type: ignore
             ), 0))
-            # B, T, 2*H, D
-
-        if self.config.nudge_IR > 0:
-            self.regularizer(tf.nn.softmax(x, axis=-1))
+            # B, T, 2*H(, D)
+        if mode == HMMMode.POSTERIOR and self.config.dropout_heads > 0:
+            B, H = tf.shape(x)[0], tf.shape(x)[2]
+            mask = tf.ones((B, H), dtype=x.dtype)
+            mask = self.dropout(mask, training=training)
+            mask = tf.expand_dims(tf.expand_dims(mask, axis=1), axis=-1)
+            mask = tf.broadcast_to(mask, tf.shape(x))
+            x = mask * x
         return x
 
-    def viterbi(
+    def call_HMM(
         self,
         x: tf.Tensor,
-        nuc: tf.Tensor,
+        nuc_left: tf.Tensor,
+        nuc_right: tf.Tensor,
+        mode: HMMMode = HMMMode.POSTERIOR,
+        parallel: int = 1,
     ) -> tf.Tensor:
-        self.cell.recurrent_init()
-        x = self.prepare_input(x, nuc)
-
-        x = viterbi(
-            x,
-            self.cell,
-            parallel_factor=self.parallel_factor,
+        if self.config.compute_heads_sequentially:
+            if self.config.use_reverse_strand:
+                B = tf.shape(x)[0] // 2
+                return tf.concat([
+                    tf.concat([
+                        hmm(
+                            x[:B],
+                            nuc_left[:B],
+                            nuc_right[:B],
+                            mode=mode,
+                            parallel=parallel,
+                        )
+                        for hmm in self.hmm
+                    ], axis=2),
+                    tf.concat([
+                        hmm(
+                            x[B:],
+                            nuc_left[B:],
+                            nuc_right[B:],
+                            mode=mode,
+                            parallel=parallel,
+                        )
+                        for hmm in self.hmm
+                    ], axis=2),
+                ], axis=0)  # type: ignore
+            return tf.concat([
+                hmm(x, nuc_left, nuc_right, mode=mode, parallel=parallel)
+                for hmm in self.hmm
+            ], axis=2)  # type: ignore
+        return self.hmm(
+            x, nuc_left, nuc_right,
+            mode=mode,
+            parallel=parallel,
         )  # type: ignore
-        x = tf.transpose(x, [1, 2, 0])
 
-        if self.config.use_reverse_strand:
-            # 2*B, T, H
-            x = tf.reshape(x, tf.concat((
-                (2, ),
-                (tf.shape(x)[0]//2, ),  # type: ignore
-                tf.shape(x)[1:]  # type: ignore
-            ), 0))
-            # 2, B, T, H
-            x = tf.concat(
-                (x[0:1], tf.reverse(x[1:2], [-2])  # type: ignore
-            ), 0)
-            x = tf.transpose(x, [1, 2, 0, 3])
-            # B, T, 2, H
-            x = tf.reshape(x, tf.concat((
-                tf.shape(x)[:2],  # type: ignore
-                (tf.shape(x)[2]*tf.shape(x)[3], ),  # type: ignore
-            ), 0))
-            # B, T, 2*H
-
-        return x
-
-    def mea(
+    def call(
         self,
         x: tf.Tensor,
         nuc: tf.Tensor,
+        mode: HMMMode = HMMMode.POSTERIOR,
+        parallel: int = 1,
         training: bool = False,
-        use_loglik: bool = True,
     ) -> tf.Tensor:
-        x = self.prepare_input(x, nuc)
-        log_post = self.state_posterior_log_probs(
-            x,
-            training=training,
-            no_loglik=not use_loglik,
-        )
-        post = tf.nn.softmax(log_post, axis=-1)
-        # H, 2*B, T, D
-        x = maximum_expected_accuracy(
-            post,
-            self.cell,
-            parallel_factor=self.parallel_factor,
-        )
-        # H, 2*B, T
-        x = tf.transpose(x, [1, 2, 0])
-        # 2*B, T, H
-        if self.config.use_reverse_strand:
-            x = tf.reshape(x, tf.concat((
-                (2, ),
-                (tf.shape(x)[0]//2, ),  # type: ignore
-                tf.shape(x)[1:]  # type: ignore
-            ), 0))
-            # 2, B, T, H
-            x = tf.concat(
-                (x[0:1], tf.reverse(x[1:2], [-2])  # type: ignore
-            ), 0)
-            x = tf.transpose(x, [1, 2, 0, 3])
-            # B, T, 2, H
-            x = tf.reshape(x, tf.concat((
-                tf.shape(x)[:2],  # type: ignore
-                (tf.shape(x)[2]*tf.shape(x)[3], ),  # type: ignore
-            ), 0))
-            # B, T, 2*H
+        x, nuc, r = self.preprocess(x, nuc)
+        nuc_left, nuc_right = left_right_3mers(nuc)  # type: ignore
+        x = self.call_HMM(x, nuc_left, nuc_right, mode=mode, parallel=parallel)
+        x = self.postprocess(x, mode=mode, training=training)
+        if self.config.nudge_IR > 0 and training: self.regularizer(x)
+        if self.config.nudge_repeats_noncoding > 0 and training:
+            self.repeats_regularizer(x, r)
         return x
 
     def compute_output_shape(
