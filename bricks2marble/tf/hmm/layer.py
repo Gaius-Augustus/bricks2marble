@@ -31,8 +31,7 @@ class AnnotationHMMConfig(ModelConfig):
     initial_exon_len: int | float | None = None
     initial_intron_len: int | float | list[float | int] | None = None
     initial_ir_len: int | float | None = None
-    train_transitions: bool = True
-    train_start_dist: bool = True
+    train_transitioner: bool = True
     share_noncoding_params: bool = False
     nudge_IR: float = 0.0
     nudge_repeats_noncoding: float = 0.0
@@ -94,6 +93,8 @@ class AnnotationHMM(tf.keras.Layer):
             hmm.transitioner.allow_start = starts
             hmm.transitioner.share_start = share_starts
             hmm.transitioner.initializer_start = values_starts
+
+            hmm.transitioner.trainable = self.config.train_transitioner
 
             if self.config.emitter_sigmoid_activation:
                 stream_emitter = TFBernoulliEmitter()
