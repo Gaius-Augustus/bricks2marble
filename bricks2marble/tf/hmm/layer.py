@@ -127,7 +127,7 @@ class AnnotationHMM(tf.keras.Layer):
             self.repeats_regularizer = RepeatsNonCodingRegularizer(
                 weight=self.config.nudge_repeats_noncoding,
                 use_reverse_strand=self.config.use_reverse_strand,
-                non_coding_start_index=1+3*self.config.intron_state_chain,
+                coding_start_index=1+3*self.config.intron_state_chain,
             )
         if self.config.dropout_heads > 0:
             self.dropout = tf.keras.layers.Dropout(self.config.dropout_heads)
