@@ -3,7 +3,8 @@ from hidten import HMMMode
 from hidten.config import ModelConfig, with_config
 from hidten.tf import TFHMM, TFBernoulliEmitter, TFCategoricalEmitter
 
-from ..loss import RepeatsNonCodingRegularizer, UncertainPredictionRegularizer
+from ..loss import (IntronParameterRegularizer, RepeatsNonCodingRegularizer,
+                    UncertainPredictionRegularizer)
 from .tools import (get_nuc_emission_distribution, left_right_3mers,
                     state_names, state_start_dist, state_transitions)
 
@@ -35,6 +36,8 @@ class AnnotationHMMConfig(ModelConfig):
     share_noncoding_params: bool = False
     nudge_IR: float = 0.0
     nudge_repeats_noncoding: float = 0.0
+    intron_regularization: float = 0.0
+    intron_regularization_value: float = 1.0
 
     @property
     def n_states(self) -> int:
@@ -126,8 +129,13 @@ class AnnotationHMM(tf.keras.Layer):
         if self.config.nudge_repeats_noncoding > 0:
             self.repeats_regularizer = RepeatsNonCodingRegularizer(
                 weight=self.config.nudge_repeats_noncoding,
-                use_reverse_strand=self.config.use_reverse_strand,
                 coding_start_index=1+3*self.config.intron_state_chain,
+            )
+        if self.config.intron_regularization > 0:
+            self.intron_regularizer = IntronParameterRegularizer(
+                weight=self.config.intron_regularization,
+                intron_state_chain=self.config.intron_state_chain,
+                start_value=self.config.intron_regularization_value,
             )
         if self.config.dropout_heads > 0:
             self.dropout = tf.keras.layers.Dropout(self.config.dropout_heads)
@@ -289,6 +297,14 @@ class AnnotationHMM(tf.keras.Layer):
         if self.config.nudge_IR > 0 and training: self.regularizer(x)
         if self.config.nudge_repeats_noncoding > 0 and training:
             self.repeats_regularizer(x, r)
+        if self.config.intron_regularization > 0:
+            if self.config.compute_heads_sequentially:
+                matrix = tf.concat([
+                    hmm.transitioner.matrix() for hmm in self.hmm
+                ], axis=0)
+            else:
+                matrix = self.hmm.transitioner.matrix()
+            self.intron_regularizer(matrix)
         return x
 
     def compute_output_shape(

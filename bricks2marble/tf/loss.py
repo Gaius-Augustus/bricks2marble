@@ -30,7 +30,6 @@ class UncertainPredictionRegularizer(tf.keras.layers.Layer):
 class RepeatsNonCodingRegularizerConfig(ModelConfig):
 
     weight: float
-    use_reverse_strand: bool
     coding_start_index: int
 
 
@@ -55,3 +54,38 @@ class RepeatsNonCodingRegularizer(tf.keras.layers.Layer):
         loss = tf.reduce_mean(tf.reduce_sum(r * pnc, axis=-1))
         self.add_loss(self.repeats_noncoding_weight * loss)
         return p
+
+
+class IntronParameterRegularizerConfig(ModelConfig):
+
+    weight: float
+    intron_state_chain: int
+    start_value: float
+
+
+@with_config(IntronParameterRegularizerConfig)
+class IntronParameterRegularizer(tf.keras.layers.Layer):
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__()
+        self.config = IntronParameterRegularizerConfig(**kwargs)
+        self.intron_weight = tf.Variable(
+            self.config.weight,
+            trainable=False,
+            dtype=tf.float32,
+        )
+        self.start_value = tf.Variable(
+            self.config.start_value,
+            trainable=False,
+            dtype=tf.float32,
+        )
+
+    def call(self, A: tf.Tensor) -> tf.Tensor:
+        diff = tf.abs(self.start_value - tf.reduce_mean(
+            tf.linalg.diag_part(tf.reduce_mean(A, axis=0))[
+                1:3*self.config.intron_state_chain
+            ]
+        ))
+        loss = self.intron_weight * diff
+        self.add_loss(loss)
+        return A
