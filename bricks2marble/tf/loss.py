@@ -60,7 +60,7 @@ class IntronParameterRegularizerConfig(ModelConfig):
 
     weight: float
     intron_state_chain: int
-    start_value: float
+    start_value: list[float]
 
 
 @with_config(IntronParameterRegularizerConfig)
@@ -79,13 +79,15 @@ class IntronParameterRegularizer(tf.keras.layers.Layer):
             trainable=False,
             dtype=tf.float32,
         )
+        self.heads = len(self.config.start_value)
 
     def call(self, A: tf.Tensor) -> tf.Tensor:
-        diff = tf.abs(self.start_value - tf.reduce_mean(
-            tf.linalg.diag_part(tf.reduce_mean(A, axis=0))[
-                1:3*self.config.intron_state_chain
-            ]
-        ))
+        diff = tf.norm(self.start_value - tf.concat([
+            tf.reduce_mean(tf.linalg.diag_part(A[i])[
+                1:1+3*self.config.intron_state_chain
+            ], keepdims=True)
+            for i in range(self.heads)
+        ], axis=0), ord=1)
         loss = self.intron_weight * diff
         self.add_loss(loss)
         return A

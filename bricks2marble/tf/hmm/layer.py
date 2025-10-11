@@ -37,7 +37,6 @@ class AnnotationHMMConfig(ModelConfig):
     nudge_IR: float = 0.0
     nudge_repeats_noncoding: float = 0.0
     intron_regularization: float = 0.0
-    intron_regularization_value: float = 1.0
 
     @property
     def n_states(self) -> int:
@@ -131,12 +130,6 @@ class AnnotationHMM(tf.keras.Layer):
                 weight=self.config.nudge_repeats_noncoding,
                 coding_start_index=1+3*self.config.intron_state_chain,
             )
-        if self.config.intron_regularization > 0:
-            self.intron_regularizer = IntronParameterRegularizer(
-                weight=self.config.intron_regularization,
-                intron_state_chain=self.config.intron_state_chain,
-                start_value=self.config.intron_regularization_value,
-            )
         if self.config.dropout_heads > 0:
             self.dropout = tf.keras.layers.Dropout(self.config.dropout_heads)
 
@@ -178,6 +171,23 @@ class AnnotationHMM(tf.keras.Layer):
                 input_shape[:-1] + (65, ),
                 input_shape[:-1] + (65, ),
             ))
+        if self.config.intron_regularization > 0:
+            if self.config.compute_heads_sequentially:
+                matrix = tf.concat([
+                    hmm.transitioner.matrix() for hmm in self.hmm
+                ], axis=0)
+            else:
+                matrix = self.hmm.transitioner.matrix()
+            isc = self.config.intron_state_chain
+            intron_value = tf.concat([tf.reduce_mean(
+                tf.linalg.diag_part(matrix[i])[1:1+3*isc],
+                keepdims=True,
+            ) for i in range(self.config.heads)], axis=0)
+            self.intron_regularizer = IntronParameterRegularizer(
+                weight=self.config.intron_regularization,
+                intron_state_chain=self.config.intron_state_chain,
+                start_value=intron_value,
+            )
 
     def state_names(self) -> list[str]:
         return state_names(self.config.intron_state_chain)
