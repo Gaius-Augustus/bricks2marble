@@ -440,22 +440,24 @@ def _GTF_from_model_conservative(
     return annotation
 
 
-def _reprediction_required(
-    left: np.ndarray,
-    right: np.ndarray,
+def _find_mismatches(
+    pred: np.ndarray,
     exon_at_boundary: int | None = None,
-) -> bool:
+) -> np.ndarray:
+    mask = np.logical_or(
+        pred[:-1, -1] != pred[1:, 0],
+        ~np.isin(pred[:-1, -1], [0, 1, 2, 3]),
+    )
     if exon_at_boundary is not None:
-        left_bound = left[-exon_at_boundary:]
-        if 4 in left_bound or 5 in left_bound or 6 in left_bound:
-            return True
-        right_bound = right[:exon_at_boundary]
-        if 4 in right_bound or 5 in right_bound or 6 in right_bound:
-            return True
-
-    if left[-1] == right[0] in [0, 1, 2, 3]:
-        return False
-    return True
+        mask = np.logical_or(
+            mask,
+            np.any(np.isin(pred[:-1, -exon_at_boundary:], [4, 5, 6]), axis=-1),
+        )
+        mask = np.logical_or(
+            mask,
+            np.any(np.isin(pred[1:, :exon_at_boundary], [4, 5, 6]), axis=-1),
+        )
+    return np.where(mask)[0]
 
 
 def _merge_replace_center(
@@ -508,46 +510,56 @@ def _GTF_from_model_liberal(
     repred_index = []
     repred_strand = []
     T_half = fasta.T // 2
-    for i in range(fasta.N-1):
-        if (fasta.segments[i].name == fasta.segments[i+1].name):
-            fwd = bwd = False
+    total_mis_fwd = 0
+    total_mis_bwd = 0
+    total_mis_both = 0
 
-            if labels_fwd is not None and _reprediction_required(
-                labels_fwd[i, :], labels_fwd[i+1, :],
+    shift = 0
+    for seq in fasta:
+        if labels_fwd is not None:
+            mis_fwd = _find_mismatches(
+                labels_fwd[shift:shift+seq.N, :],
                 exon_at_boundary=exon_at_boundary,
-            ):
-                fwd = True
-            if labels_bwd is not None and _reprediction_required(
-                labels_bwd[i, :], labels_bwd[i+1, :],
+            ) + shift
+        else:
+            mis_fwd = np.array([])
+        if labels_bwd is not None:
+            mis_bwd = _find_mismatches(
+                labels_bwd[shift:shift+seq.N, :],
                 exon_at_boundary=exon_at_boundary,
-            ):
-                bwd = True
+            ) + shift
+        else:
+            mis_bwd = np.array([])
+        dupli = np.isin(mis_fwd, mis_bwd)
+        mis_both = mis_fwd[dupli]
+        mis_bwd = mis_bwd[~np.isin(mis_bwd, mis_fwd)]
+        mis_fwd = mis_fwd[~dupli]
+        mis = np.r_[mis_fwd, mis_bwd, mis_both]
+        total_mis_fwd += len(mis_fwd)
+        total_mis_bwd += len(mis_bwd)
+        total_mis_both += len(mis_both)
+        repred_index.extend(mis)
+        repred_strand.extend(np.r_[
+            np.zeros(len(mis_fwd), dtype=np.int32),
+            np.ones(len(mis_bwd), dtype=np.int32),
+            np.ones(len(mis_both), dtype=np.int32)+1,
+        ])
+        repred_seqs.append(Sequence(
+            np.concatenate(
+                (fasta.nuc[mis, T_half:], fasta.nuc[mis+1, :T_half]),
+                axis=-1,
+            ),
+            name=seq.name,
+        ))
+        shift += seq.N
 
-            if fwd or bwd:
-                repred_seqs.append(Sequence(
-                    np.expand_dims(
-                        np.concatenate(
-                            (fasta.nuc[i, T_half:], fasta.nuc[i+1, :T_half]),
-                            axis=0,
-                        ),
-                        axis=0,
-                    ),
-                    name=fasta.segments[i].name,
-                    start=fasta.segments[i].start+T_half,
-                    end=fasta.segments[i+1].end-T_half,
-                ))
-                repred_index.append(i)
-                if fwd and bwd:
-                    repred_strand.append(2)
-                else:
-                    repred_strand.append(0 if fwd else 1)
-
+    total = total_mis_fwd + total_mis_bwd + total_mis_both
     if len(repred_seqs) > 0:
         if verbose: print(
             f"[{default_timer()-start_time:.4f}s] Mismatches: "
-            f"{repred_strand.count(0)} (+) | {repred_strand.count(1)} (-) | "
-            f"{repred_strand.count(2)} (+/-). "
-            f"Repredicting {len(repred_seqs)} sequences.",
+            f"{total_mis_fwd} (+) | {total_mis_bwd} (-) | "
+            f"{total_mis_both} (+/-). "
+            f"Repredicting {total} sequences.",
             flush=True,
         )
         repred_fwd, repred_bwd = predict_func(FASTA(repred_seqs))
@@ -557,32 +569,24 @@ def _GTF_from_model_liberal(
         flush=True,
     )
 
-    for i in range(fasta.N-1):
-        if len(repred_index) == 0:
-            break
-        if i == repred_index[0]:
-            strand = repred_strand.pop(0)
-            if strand == 0 or strand == 2:
-                labels_fwd[i], labels_fwd[i+1] = (  # type: ignore
-                    _merge_replace_center(
-                        labels_fwd[i],  # type: ignore
-                        labels_fwd[i+1],  # type: ignore
-                        repred_fwd[0],  # type: ignore
-                    )
+    for k, i in enumerate(repred_index):
+        strand = repred_strand[k]
+        if strand == 0 or strand == 2:
+            labels_fwd[i], labels_fwd[i+1] = (  # type: ignore
+                _merge_replace_center(
+                    labels_fwd[i],  # type: ignore
+                    labels_fwd[i+1],  # type: ignore
+                    repred_fwd[k],  # type: ignore
                 )
-                repred_fwd = repred_fwd[1:]  # type: ignore
-                if strand == 0: repred_bwd = repred_bwd[1:]  # type: ignore
-            if strand == 1 or strand == 2:
-                labels_bwd[i], labels_bwd[i+1] = (  # type: ignore
-                    _merge_replace_center(
-                        labels_bwd[i],  # type: ignore
-                        labels_bwd[i+1],  # type: ignore
-                        repred_bwd[0],  # type: ignore
-                    )
+            )
+        if strand == 1 or strand == 2:
+            labels_bwd[i], labels_bwd[i+1] = (  # type: ignore
+                _merge_replace_center(
+                    labels_bwd[i],  # type: ignore
+                    labels_bwd[i+1],  # type: ignore
+                    repred_bwd[k],  # type: ignore
                 )
-                repred_bwd = repred_bwd[1:]  # type: ignore
-                if strand == 1: repred_fwd = repred_fwd[1:]  # type: ignore
-            repred_index.pop(0)
+            )
 
     if verbose: print(
         f"[{default_timer()-start_time:.4f}s] Forming regions.",
@@ -591,55 +595,41 @@ def _GTF_from_model_liberal(
 
     entries_fwd: dict[str, list[list[Region]]] = {}
     entries_bwd: dict[str, list[list[Region]]] = {}
-    current_fwd = []
-    current_bwd = []
-    i = 0
-    while i < fasta.N:
-        name = fasta.segments[i].name
-        start = fasta.segments[i].start
-        while name == fasta.segments[i].name:
-            if labels_fwd is not None:
-                current_fwd.append(labels_fwd[i])
-            if labels_bwd is not None:
-                current_bwd.append(labels_bwd[i])
-            i += 1
-            if i == fasta.N:
-                break
-
-        if len(current_fwd) > 0:
+    shift = 0
+    for seq in fasta:
+        if labels_fwd is not None:
             regions = _split_regions(
-                np.concatenate(current_fwd, axis=0),
-                offset=start,
+                labels_fwd[shift:shift+seq.N, :].flatten(),
+                offset=shift,
                 strand="+",
             )
             _, txs, last = _transcripts_from_regions(
                 regions,
                 seperate_first=False,
             )
-            if name not in entries_fwd:
-                entries_fwd[name] = []
+            if seq.name not in entries_fwd:
+                entries_fwd[seq.name] = []
             if len(last) > 0:
-                entries_fwd[name] += [last]
-            entries_fwd[name] += txs
+                entries_fwd[seq.name] += [last]
+            entries_fwd[seq.name] += txs
 
-        if len(current_bwd) > 0:
+        if labels_bwd is not None:
             regions = _split_regions(
-                np.concatenate(current_bwd, axis=0),
-                offset=start,
+                labels_bwd[shift:shift+seq.N, :].flatten(),
+                offset=shift,
                 strand="-",
             )
             _, txs, last = _transcripts_from_regions(
                 regions,
                 seperate_first=False,
             )
-            if name not in entries_bwd:
-                entries_bwd[name] = []
+            if seq.name not in entries_bwd:
+                entries_bwd[seq.name] = []
             if len(last) > 0:
-                entries_bwd[name] += [last]
-            entries_bwd[name] += txs
+                entries_bwd[seq.name] += [last]
+            entries_bwd[seq.name] += txs
 
-        current_fwd = []
-        current_bwd = []
+        shift += seq.N
 
     if verbose: print(
         f"[{default_timer()-start_time:.4f}s] Creating GTF entries.",
