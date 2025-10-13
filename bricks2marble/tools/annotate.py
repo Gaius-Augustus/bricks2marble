@@ -600,7 +600,6 @@ def _GTF_from_model_liberal(
         if labels_fwd is not None:
             regions = _split_regions(
                 labels_fwd[shift:shift+seq.N, :].flatten(),
-                offset=shift,
                 strand="+",
             )
             _, txs, last = _transcripts_from_regions(
@@ -609,14 +608,11 @@ def _GTF_from_model_liberal(
             )
             if seq.name not in entries_fwd:
                 entries_fwd[seq.name] = []
-            if len(last) > 0:
-                entries_fwd[seq.name] += [last]
             entries_fwd[seq.name] += txs
 
         if labels_bwd is not None:
             regions = _split_regions(
                 labels_bwd[shift:shift+seq.N, :].flatten(),
-                offset=shift,
                 strand="-",
             )
             _, txs, last = _transcripts_from_regions(
@@ -625,8 +621,6 @@ def _GTF_from_model_liberal(
             )
             if seq.name not in entries_bwd:
                 entries_bwd[seq.name] = []
-            if len(last) > 0:
-                entries_bwd[seq.name] += [last]
             entries_bwd[seq.name] += txs
 
         shift += seq.N
