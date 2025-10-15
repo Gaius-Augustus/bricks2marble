@@ -233,6 +233,12 @@ class Transcript:
         cds = self.coords(FeatureType.CDS)
         return sum([c[1] - c[0] + 1 for c in cds])
 
+    def intron_lengths(self) -> list[int]:
+        """Returns a list of lengths of introns in the trancript."""
+        self.find_introns()
+        cds = self.coords(FeatureType.Intron)
+        return [c[1] - c[0] + 1 for c in cds]
+
     def finalize(self) -> bool:
         """Finishes building the transcript by adding missing introns
         and start-/stop-codons. Also fixes the frames of the CDS by

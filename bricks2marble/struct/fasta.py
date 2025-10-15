@@ -3,44 +3,6 @@ from typing import Callable, Literal, overload
 import numpy as np
 from pydantic import BaseModel
 
-MAP = {
-    "A": 0, "C": 1, "G": 2, "T": 3, "N": 4,
-    "a": 5, "c": 6, "g": 7, "t": 8, "n": 4,
-}
-ENCODING = np.array([
-    [1, 0, 0, 0, 0, 0],
-    [0, 1, 0, 0, 0, 0],
-    [0, 0, 1, 0, 0, 0],
-    [0, 0, 0, 1, 0, 0],
-    [0, 0, 0, 0, 1, 0],
-    [1, 0, 0, 0, 0, 1],
-    [0, 1, 0, 0, 0, 1],
-    [0, 0, 1, 0, 0, 1],
-    [0, 0, 0, 1, 0, 1],
-])
-ENCODING_NO_REPEATS = np.array([
-    [1, 0, 0, 0, 0],
-    [0, 1, 0, 0, 0],
-    [0, 0, 1, 0, 0],
-    [0, 0, 0, 1, 0],
-    [0, 0, 0, 0, 1],
-    [1, 0, 0, 0, 0],
-    [0, 1, 0, 0, 0],
-    [0, 0, 1, 0, 0],
-    [0, 0, 0, 1, 0],
-])
-ENCODING_EXPANDED_REPEATS = np.array([
-    [1, 0, 0, 0, 0, 0, 0, 0, 0],
-    [0, 1, 0, 0, 0, 0, 0, 0, 0],
-    [0, 0, 1, 0, 0, 0, 0, 0, 0],
-    [0, 0, 0, 1, 0, 0, 0, 0, 0],
-    [0, 0, 0, 0, 1, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 1, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0, 1, 0, 0],
-    [0, 0, 0, 0, 0, 0, 0, 1, 0],
-    [0, 0, 0, 0, 0, 0, 0, 0, 1],
-])
-
 
 class Segment(BaseModel):
     """A segment has a name and a defined range. It is typically used to
@@ -79,6 +41,73 @@ class Region(Segment):
         if isinstance(other, Region):
             return super().__eq__(other)
         raise NotImplementedError("Can only compare Region to Region type")
+
+
+def one_hot(
+    sequences: np.ndarray,
+    pad_index: int = 4,
+    repeats: Literal["track", "expand", "omit"] = "track",
+    N: Literal["track", "uniform"] = "track",
+    dtype: type = np.float32,
+) -> np.ndarray:
+    """Returns a one-hot encoded version of :meth:`Sequence.nuc` of
+    shape ``(N, T, D)``, where ``D`` can be 4, 5 or 6, depending on
+    the options below.
+
+    Args:
+        sequences (np.ndarray, optional): Which sequences to encode.
+            Defaults to ``self.nuc``.
+        pad_index (int, optional): What to replace the padding
+            character (-1) by before encoding. Default to 4, which
+            is an `N`.
+        repeats (str, optional): Changes the way repeat-masked
+            positions are represented in the output. Can be either
+            "track", "expand" or "omit". Defaults to "track".
+            - "track": One additional dimension serves as a flag if
+            the position is repeat-masked or not.
+            - "expand": Four additional dimensions that are one-hot
+            encodings of the four possible lower-case letters.
+            - "omit": Do not include repeat information.
+        N (str, optional): Changes the way N-tokens are encoded. Can
+            be either "track" or "uniform". Defaults to "track".
+            - "track": Adds another dimension to each position.
+            - "uniform": Represents N as a uniform distribution over
+                the four nucleotides.
+        dtype (numpy dtype, optional): The dtype of the output encoding.
+            Defaults to `float32`.
+    """
+    nuc = sequences.copy()
+    nuc[nuc == -1] = pad_index
+
+    match repeats:
+        case "track" | "omit":
+            encoding = np.array([
+                [1, 0, 0, 0, 0, 0],
+                [0, 1, 0, 0, 0, 0],
+                [0, 0, 1, 0, 0, 0],
+                [0, 0, 0, 1, 0, 0],
+                [0, 0, 0, 0, 1, 0],
+                [1, 0, 0, 0, 0, 1],
+                [0, 1, 0, 0, 0, 1],
+                [0, 0, 1, 0, 0, 1],
+                [0, 0, 0, 1, 0, 1],
+            ])
+            if repeats == "omit":
+                encoding = encoding[:, :5]
+        case "expand":
+            encoding = np.eye(9)
+        case _:
+            raise ValueError(f"Repeats mode {repeats!r} unknown.")
+
+    encoded = encoding[nuc].astype(dtype)
+    if N == "uniform":
+        mask = encoded[..., 4] == 1
+        encoded = np.concatenate([
+            encoded[..., :4],
+            encoded[..., 5:],
+        ], axis=-1)
+        encoded[mask, :4] = 1/4
+    return encoded
 
 
 class Sequence:
@@ -183,16 +212,16 @@ class Sequence:
 
     def one_hot(
         self,
-        sequences: np.ndarray | None = None,
         pad_index: int = 4,
         repeats: Literal["track", "expand", "omit"] = "track",
+        N: Literal["track", "uniform"] = "track",
+        dtype: type = np.float32,
     ) -> np.ndarray:
         """Returns a one-hot encoded version of :meth:`Sequence.nuc` of
-        shape ``(N, T, 6)``.
+        shape ``(N, T, D)``, where ``D`` can be 4, 5 or 6, depending on
+        the options below.
 
         Args:
-            sequences (np.ndarray, optional): Which sequences to encode.
-                Defaults to ``self.nuc``.
             pad_index (int, optional): What to replace the padding
                 character (-1) by before encoding. Default to 4, which
                 is an `N`.
@@ -204,14 +233,15 @@ class Sequence:
                 - "expand": Four additional dimensions that are one-hot
                 encodings of the four possible lower-case letters.
                 - "omit": Do not include repeat information.
+            N (str, optional): Changes the way N-tokens are encoded. Can
+                be either "track" or "uniform". Defaults to "track".
+                - "track": Adds another dimension to each position.
+                - "uniform": Represents N as a uniform distribution over
+                    the four nucleotides.
+            dtype (numpy dtype, optional): The dtype of the output
+                encoding. Defaults to `float32`.
         """
-        nuc = self.nuc.copy() if sequences is None else sequences.copy()
-        nuc[nuc == -1] = pad_index
-        if repeats == "omit":
-            return ENCODING_NO_REPEATS[nuc]
-        if repeats == "expand":
-            return ENCODING_EXPANDED_REPEATS[nuc]
-        return ENCODING[nuc]
+        return one_hot(self.nuc, pad_index, repeats, N, dtype)
 
     def resample(
         self,
@@ -401,16 +431,16 @@ class FASTA:
 
     def one_hot(
         self,
-        sequences: np.ndarray | None = None,
         pad_index: int = 4,
         repeats: Literal["track", "expand", "omit"] = "track",
+        N: Literal["track", "uniform"] = "track",
+        dtype: type = np.float32,
     ) -> np.ndarray:
-        """Returns a one-hot encoded version of :meth:`FASTA.nuc` of
-        shape ``(N, T, 6)``.
+        """Returns a one-hot encoded version of :meth:`Sequence.nuc` of
+        shape ``(N, T, D)``, where ``D`` can be 4, 5 or 6, depending on
+        the options below.
 
         Args:
-            sequences (np.ndarray, optional): Which sequences to encode.
-                Defaults to ``self.nuc``.
             pad_index (int, optional): What to replace the padding
                 character (-1) by before encoding. Default to 4, which
                 is an `N`.
@@ -422,14 +452,15 @@ class FASTA:
                 - "expand": Four additional dimensions that are one-hot
                 encodings of the four possible lower-case letters.
                 - "omit": Do not include repeat information.
+            N (str, optional): Changes the way N-tokens are encoded. Can
+                be either "track" or "uniform". Defaults to "track".
+                - "track": Adds another dimension to each position.
+                - "uniform": Represents N as a uniform distribution over
+                    the four nucleotides.
+            dtype (numpy dtype, optional): The dtype of the output
+                encoding. Defaults to `float32`.
         """
-        nuc = self.nuc.copy() if sequences is None else sequences.copy()
-        nuc[nuc == -1] = pad_index
-        if repeats == "omit":
-            return ENCODING_NO_REPEATS[nuc]
-        if repeats == "expand":
-            return ENCODING_EXPANDED_REPEATS[nuc]
-        return ENCODING[nuc]
+        return one_hot(self.nuc, pad_index, repeats, N, dtype)
 
     def occurences(
         self,

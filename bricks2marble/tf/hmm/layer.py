@@ -34,6 +34,7 @@ class AnnotationHMMConfig(ModelConfig):
     initial_ir_len: int | float | None = None
     train_transitioner: bool = True
     share_noncoding_params: bool = False
+    uniform_N: bool = False
     nudge_IR: float = 0.0
     nudge_repeats_noncoding: float = 0.0
     intron_regularization: float = 0.0
@@ -201,7 +202,11 @@ class AnnotationHMM(tf.keras.Layer):
             r = nuc[..., 5:6]
             nuc = nuc[..., :5]
         if self.config.use_reverse_strand:
-            nuc_reverse = tf.gather(nuc, [3, 2, 1, 0, 4], axis=-1)
+            nuc_reverse = tf.gather(
+                nuc,
+                [3, 2, 1, 0] if self.config.uniform_N else [3, 2, 1, 0, 4],
+                axis=-1,
+            )
             nuc_reverse = tf.reverse(nuc_reverse, [-2])
             nuc = tf.concat((nuc, nuc_reverse), axis=0)  # type: ignore
             x = tf.concat((x, tf.reverse(x, [-2])), axis=0)  # type: ignore
@@ -301,7 +306,10 @@ class AnnotationHMM(tf.keras.Layer):
         training: bool = False,
     ) -> tf.Tensor:
         x, nuc, r = self.preprocess(x, nuc)
-        nuc_left, nuc_right = left_right_3mers(nuc)  # type: ignore
+        nuc_left, nuc_right = left_right_3mers(
+            nuc,
+            uniform_N=self.config.uniform_N,
+        )
         x = self.call_HMM(x, nuc_left, nuc_right, mode=mode, parallel=parallel)
         x = self.postprocess(x, mode=mode, training=training)
         if self.config.nudge_IR > 0 and training: self.regularizer(x)

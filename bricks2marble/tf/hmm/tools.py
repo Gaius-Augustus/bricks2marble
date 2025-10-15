@@ -55,10 +55,10 @@ def make_codon_probs(
     return codon_probs[tf.newaxis, tf.newaxis, :]
 
 
-@tf.function
 def make_kmer(
     x: tf.Tensor,
     k: int,
+    uniform_N: bool = False,
     pivot_left: bool = True,
     collapse_pivot: bool = False,
 ) -> tf.Tensor:
@@ -70,6 +70,8 @@ def make_kmer(
             sequences of length T. Assumes that the last dimension is
             one-hot encoded with "N" corresponding to the last position.
         k (int): The length of the k-mer.
+        uniform_N (bool, optional): Whether the "N" is already encoded
+            as a uniform distribution over the four nucleotides.
         pivot_left (bool, optional): Whether to pivot the k-mer to the
             left or right.
         collapse_pivot (bool, optional): Whether to collapse the last
@@ -87,11 +89,13 @@ def make_kmer(
             possible at that position.
     """
     L = tf.shape(x)[-2]  # type: ignore
-    D = tf.cast(tf.shape(x)[-1] - 1, x.dtype)  # type: ignore
+    D = tf.cast(tf.shape(x)[-1], x.dtype)  # type: ignore
 
-    base_probs = (
-        x[..., :-1] + (tf.cast(x[..., -1:] == 1, x.dtype) / D)  # type: ignore
-    )
+    if uniform_N:
+        base_probs = tf.identity(x)
+    else:
+        D -= 1
+        base_probs = x[..., :-1] + (tf.cast(x[..., -1:] == 1, x.dtype) / D)
     pad = tf.ones_like(base_probs[..., :k-1, :]) / D
     if pivot_left:
         padded = tf.concat([base_probs, pad], axis=-2)
@@ -118,12 +122,15 @@ def make_kmer(
     return k_mer
 
 
-@tf.function
-def left_right_3mers(nuc: tf.Tensor) -> tuple[tf.Tensor, tf.Tensor]:
+def left_right_3mers(
+    nuc: tf.Tensor,
+    uniform_N: bool = False,
+) -> tuple[tf.Tensor, tf.Tensor]:
     left_3mers = tf.concat([
         make_kmer(
             nuc,
             k=3,
+            uniform_N=uniform_N,
             pivot_left=True,
             collapse_pivot=True,
         ),
@@ -136,6 +143,7 @@ def left_right_3mers(nuc: tf.Tensor) -> tuple[tf.Tensor, tf.Tensor]:
         make_kmer(
             nuc,
             k=3,
+            uniform_N=uniform_N,
             pivot_left=False,
             collapse_pivot=True,
         ),
