@@ -199,8 +199,9 @@ class AnnotationHMM(tf.keras.Layer):
         nuc: tf.Tensor,
     ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor | None]:
         if self.config.nudge_repeats_noncoding > 0:
-            r = nuc[..., 5:6]
-            nuc = nuc[..., :5]
+            five = 4 if self.config.uniform_N else 5
+            r = nuc[..., five:five+1]
+            nuc = nuc[..., :five]
         if self.config.use_reverse_strand:
             nuc_reverse = tf.gather(
                 nuc,

@@ -544,13 +544,14 @@ def _GTF_from_model_liberal(
             np.ones(len(mis_bwd), dtype=np.int32),
             np.ones(len(mis_both), dtype=np.int32)+1,
         ])
-        repred_seqs.append(Sequence(
-            np.concatenate(
-                (fasta.nuc[mis, T_half:], fasta.nuc[mis+1, :T_half]),
-                axis=-1,
-            ),
-            name=seq.name,
-        ))
+        if mis.size > 0:
+            repred_seqs.append(Sequence(
+                np.concatenate(
+                    (fasta.nuc[mis, T_half:], fasta.nuc[mis+1, :T_half]),
+                    axis=-1,
+                ),
+                name=seq.name,
+            ))
         shift += seq.N
 
     total = total_mis_fwd + total_mis_bwd + total_mis_both
