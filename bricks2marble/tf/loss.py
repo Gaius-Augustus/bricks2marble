@@ -14,6 +14,11 @@ class UncertainPredictionRegularizer(tf.keras.layers.Layer):
     def __init__(self, **kwargs) -> None:
         super().__init__()
         self.config = UncertainPredictionRegularizerConfig(**kwargs)
+        self.nudge_weight = tf.Variable(
+            self.config.weight,
+            trainable=False,
+            dtype=tf.float32,
+        )
 
     def call(self, p: tf.Tensor) -> tf.Tensor:
         entropy = -tf.reduce_sum(
@@ -23,7 +28,7 @@ class UncertainPredictionRegularizer(tf.keras.layers.Layer):
         loss = tf.reduce_mean(
             entropy * (1.0 - p[..., self.config.class_index])  # type: ignore
         )
-        self.add_loss(self.config.weight * loss)
+        self.add_loss(self.nudge_weight * loss)
         return p
 
 
