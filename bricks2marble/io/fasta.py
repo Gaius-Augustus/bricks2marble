@@ -93,3 +93,26 @@ def write_fasta(
             translated = translated.decode("utf-8")
             for i in range(0, len(translated), line_length):
                 f.write(translated[i:i+line_length]+"\n")
+
+
+def fasta_from_string(string: str) -> FASTA:
+    """Creates a :class:`FASTA` object with a single sequence from a
+    continuous string of nucleotides.
+    """
+    table = bytearray([4]*256)
+    mappings = {a: b for a, b in zip(
+        b"ACGTNnacgt",
+        [0, 1, 2, 3, 4, 4, 5, 6, 7, 8],
+    )}
+    for k, v in mappings.items():
+        table[k] = v
+    translation_table = bytes(table)
+
+    sequences = [Sequence(
+        np.frombuffer(
+            string.encode().translate(translation_table),
+            dtype=np.int8,
+        )[np.newaxis, :],
+        name="seq1",
+    )]
+    return FASTA(sequences)

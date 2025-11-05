@@ -1,1 +1,1 @@
-from .layer import AnnotationHMM
+from .layer import AnnotationHMM, AnnotationHMMConfig

@@ -1,1 +1,1 @@
-from .hmm import AnnotationHMM
+from .hmm import AnnotationHMM, AnnotationHMMConfig
