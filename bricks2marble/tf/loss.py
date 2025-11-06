@@ -96,3 +96,38 @@ class IntronParameterRegularizer(tf.keras.layers.Layer):
         loss = self.intron_weight * diff
         self.add_loss(loss)
         return A
+
+
+class IRIntronRatioRegularizerConfig(ModelConfig):
+
+    weight: float
+    intron_state_chain: int
+
+
+@with_config(IRIntronRatioRegularizerConfig)
+class IRIntronRatioRegularizer(tf.keras.layers.Layer):
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__()
+        self.config = IRIntronRatioRegularizerConfig(**kwargs)
+        self.weight = tf.Variable(
+            self.config.weight,
+            trainable=False,
+            dtype=tf.float32,
+        )
+        self.intron_index = 1 + 3 * (self.config.intron_state_chain - 1)
+        self.metric = tf.keras.metrics.Mean(name="ir-intron-ratio")
+        self.metric_ir = tf.keras.metrics.Mean(name="ir-loop")
+        self.metric_intron = tf.keras.metrics.Mean(name="intron-loop")
+
+    def call(self, A: tf.Tensor) -> tf.Tensor:
+        p = A[:, 0, 0]
+        q = A[:, self.intron_index, self.intron_index]
+        max_ = tf.maximum(p, q)
+        min_ = tf.minimum(p, q)
+        loss = tf.reduce_mean(max_ / min_ - 1)
+        self.add_loss(self.weight * loss)
+        self.metric.update_state(loss)
+        self.metric_ir.update_state(p)
+        self.metric_intron.update_state(q)
+        return A
