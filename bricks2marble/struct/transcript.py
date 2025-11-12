@@ -177,7 +177,8 @@ class Transcript:
 
     def coords(self, feature: FeatureType) -> list[tuple[int, int]]:
         """Get the coordinates of the regions of the given
-        :class:`FeatureType`.
+        :class:`FeatureType`. Indexing starts at zero and does not
+        include the end point, following Python conventions.
 
         Args:
             feature (FeatureType): The type of feature to extract from
@@ -230,14 +231,19 @@ class Transcript:
         """Returns the total length of all coding regions in the
         transcript combined.
         """
+        return sum(self.cds_lengths())
+
+    def cds_lengths(self) -> list[int]:
+        """Returns a list of lengths of coding regions in the
+        transcript."""
         cds = self.coords(FeatureType.CDS)
-        return sum([c[1] - c[0] + 1 for c in cds])
+        return [c[1] - c[0] for c in cds]
 
     def intron_lengths(self) -> list[int]:
         """Returns a list of lengths of introns in the trancript."""
         self.find_introns()
         cds = self.coords(FeatureType.Intron)
-        return [c[1] - c[0] + 1 for c in cds]
+        return [c[1] - c[0] for c in cds]
 
     def finalize(self) -> bool:
         """Finishes building the transcript by adding missing introns
