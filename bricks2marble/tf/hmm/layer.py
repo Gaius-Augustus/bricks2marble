@@ -6,8 +6,9 @@ from hidten.tf import TFHMM, TFBernoulliEmitter, TFCategoricalEmitter
 from ..loss import (IntronParameterRegularizer, IRIntronRatioRegularizer,
                     RepeatsNonCodingRegularizer,
                     UncertainPredictionRegularizer)
-from .tools import (get_nuc_emission_distribution, left_right_3mers,
-                    state_names, state_start_dist, state_transitions)
+from .tools import (emission_parameters, get_nuc_emission_distribution,
+                    left_right_3mers, state_names, state_start_dist,
+                    state_transitions)
 
 
 class AnnotationHMMConfig(ModelConfig):
@@ -25,7 +26,16 @@ class AnnotationHMMConfig(ModelConfig):
     use_reverse_strand: bool = False
     parallel_factor: int = 1
 
+    emitter_share_noncoding: bool = False
+    """Shares noncoding state emission parameters."""
+    emitter_share_frames: bool = True
+    """Shares state emissions that correspond to the same state in
+    different reading frames."""
     emitter_sigmoid_activation: bool = False
+    """Uses a sigmoid activated emission matrix instead of softmax
+    activated one."""
+    train_emitter: bool = True
+    """Toggles training of the emitter."""
 
     intron_state_chain: int = 1
     intron_chain_skips: bool = False
@@ -34,7 +44,6 @@ class AnnotationHMMConfig(ModelConfig):
     initial_intron_len: int | float | list[float | int] | None = None
     initial_ir_len: int | float | None = None
     train_transitioner: bool = True
-    share_noncoding_params: bool = False
     uniform_N: bool = False
     nudge_IR: float = 0.0
     nudge_repeats_noncoding: float = 0.0
@@ -146,39 +155,25 @@ class AnnotationHMM(tf.keras.Layer):
         S = self.config.n_states
         H = 1 if self.config.compute_heads_sequentially else self.config.heads
         isc = self.config.intron_state_chain
+
+        init, allow, share = emission_parameters(
+            D=D, S=S, H=H, isc=isc,
+            share_noncoding=self.config.emitter_share_noncoding,
+            share_frames=self.config.emitter_share_frames,
+        )
         for hmm in (
             self.hmm if self.config.compute_heads_sequentially else [self.hmm]
         ):
-            hmm.emitter[0].allow = [
-                (h, i, k)
-                for h, states in enumerate([S]*H)
-                for k in range(D)
-                for i in range(states)
-            ]
-            hmm.emitter[0].share = ([
-                (h*D*S+i*S+1+j*3, h*D*S+i*S+4+j*3)
-                for h in range(H)
-                for i in range(D)
-                for j in range(isc)
-            ] if not self.config.share_noncoding_params else [
-                (h*D*S+i*S, h*D*S+i*S+1+isc*3)
-                for h in range(H)
-                for i in range(D)
-            ]) + [
-                (h*D*S+i*S+5+3*isc, h*D*S+i*S+8+3*isc)
-                for h in range(H)
-                for i in range(D)
-            ] + [
-                (h*D*S+i*S+8+3*isc, h*D*S+i*S+11+3*isc)
-                for h in range(H)
-                for i in range(D)
-            ]
-            hmm.emitter[0].initializer = tf.initializers.GlorotNormal()
+            hmm.emitter[0].allow = allow
+            hmm.emitter[0].share = share
+            hmm.emitter[0].initializer = init
+            hmm.emitter[0].trainable = self.config.train_emitter
             hmm.build((
                 input_shape,
                 input_shape[:-1] + (65, ),
                 input_shape[:-1] + (65, ),
             ))
+
         if self.config.intron_regularization > 0:
             if self.config.compute_heads_sequentially:
                 matrix = tf.concat([

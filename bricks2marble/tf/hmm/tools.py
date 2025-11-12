@@ -242,6 +242,56 @@ def get_nuc_emission_distribution(
     return left_codon_probs.numpy(), right_codon_probs.numpy()  # type: ignore
 
 
+def emission_parameters(
+    D: int,
+    S: int,
+    H: int,
+    isc: int = 1,
+    share_noncoding: bool = False,
+    share_frames: bool = True,
+) -> tuple[
+    np.ndarray | tf.keras.Initializer,
+    list[tuple[int, int, int]],
+    list[tuple[int, int]]
+]:
+    allow = [
+        (h, i, k)
+        for h, states in enumerate([S]*H)
+        for k in range(D)
+        for i in range(states)
+    ]
+
+    share = []
+    if share_noncoding:
+        share += [
+            (h*D*S+i*S, h*D*S+i*S+1+isc*3)
+            for h in range(H)
+            for i in range(D)
+        ]
+    elif share_frames:
+        share += [
+            (h*D*S+i*S+1+j*3, h*D*S+i*S+4+j*3)
+            for h in range(H)
+            for i in range(D)
+            for j in range(isc)
+        ]
+
+    if share_frames:
+        share += (
+            [
+                (h*D*S+i*S+5+3*isc, h*D*S+i*S+8+3*isc)
+                for h in range(H)
+                for i in range(D)
+            ] + [
+                (h*D*S+i*S+8+3*isc, h*D*S+i*S+11+3*isc)
+                for h in range(H)
+                for i in range(D)
+            ]
+        )
+
+    return tf.keras.initializers.GlorotNormal(), allow, share
+
+
 def state_transitions(
     isc: int = 1,
     intron_chain_skips: bool = False,
