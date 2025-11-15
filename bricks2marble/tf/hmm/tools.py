@@ -292,6 +292,110 @@ def emission_parameters(
     return tf.keras.initializers.GlorotNormal(), allow, share
 
 
+def state_transitions_simple(
+    share_noncoding: bool = False,
+    share_frames: bool = True,
+    p_IR: int | float | None = None,
+    p_intron: int | float | None = None,
+    p_exon: int | float | None = None,
+    heads: int = 1,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+    """Base case of `state_transitions` with no intron chains.
+    Implementation is purely for better management and quicker testing
+    of new features.
+    """
+    if p_IR is None: p_IR = 0.9999
+    if p_exon is None: p_exon = 0.975
+    if p_intron is None: p_intron = 0.99
+
+    if p_IR < 1: p_IR = 1 / (1-p_IR)
+    if p_exon < 1: p_exon = 1 / (1-p_exon)
+    if p_intron < 1: p_intron = 1 / (1-p_intron)
+
+    indices = np.array([
+        # IR -> IR
+        [ 0,  0, np.log(p_IR - 1)],
+
+        # Ik -> Ik
+        [ 1,  1, np.log(p_intron - 1)],
+        [ 2,  2, np.log(p_intron - 1)],
+        [ 3,  3, np.log(p_intron - 1)],
+
+        # IR -> START
+        [ 0,  7, 0],
+
+        # Ik -> IEk
+        [ 1,  11, 0],
+        [ 2,  12, 0],
+        [ 3,  13, 0],
+
+        # EIk -> Ik
+        [ 8,  1, 0],
+        [ 9,  2, 0],
+        [10,  3, 0],
+
+        # START -> E1 -> STOP -> IR
+        [ 7,  5, 0],
+        [ 5, 14, np.log(1/2)],
+        [14,  0, 0],
+
+        # E0 -> E1 -> E2 -> E0
+        [ 4,  5, np.log(p_exon - 1)],
+        [ 5,  6, np.log(p_exon - 1)],
+        [ 6,  4, np.log(p_exon - 1)],
+
+        # Ek -> EIk
+        [ 4,  8, 0],
+        [ 5,  9, np.log(1/2)],
+        [ 6, 10, 0],
+
+        # IEk -> Ek
+        [11, 4, 0],
+        [12, 5, 0],
+        [13, 6, 0],
+    ])
+    indices = indices[:, :2].astype(np.int64)
+
+    share = []
+    values = []
+    if share_noncoding:
+        share += [[0, 4], [4, 8]]
+        values += [np.log(p_IR - 1), 0]
+    elif share_frames:
+        share += [[1, 4]]
+        share += [[5, 8]]
+        values += [np.log(p_IR - 1), np.log(p_intron - 1), 0, 0]
+    else:
+        share = None
+        values += [np.log(p_IR - 1)]
+        values += 3 * [np.log(p_intron - 1)]
+        values += 4 * [0]
+
+    values += 3* [0]
+    values += [0, np.log(1/2), 0]
+    values += 3 * [np.log(p_exon - 1)]
+    values += [0, np.log(1/2), 0]
+    values += 3 * [0]
+
+    repeats = np.arange(heads).reshape(heads, 1, 1)
+    repeats = np.tile(repeats, (1, len(indices), 1))
+    indices = np.tile(indices, (heads, 1, 1))
+    indices = np.concatenate([repeats, indices], axis=-1, dtype=np.int64)
+    indices = indices.reshape(-1, 3)
+
+    values = np.array(values).astype(np.float32)
+    values = np.exp(values) / np.sum(np.exp(values), -1, keepdims=True)
+    values = np.tile(values, heads)
+
+    if share is not None:
+        share = np.array(share)
+        share = np.r_[*[
+            share + i*(len(indices)//heads) for i in range(heads)
+        ]]
+
+    return indices, values, share
+
+
 def state_transitions(
     isc: int = 1,
     intron_chain_skips: bool = False,
@@ -300,6 +404,8 @@ def state_transitions(
     p_intron: int | float | list[float | int] | None = None,
     p_exon: int | float | None = None,
     heads: int = 1,
+    share_noncoding: bool = False,
+    share_frames: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """Generates a tuple of arrays ``(indices, values, share)`` for the
     initialization of an HMM transitioner.
@@ -336,6 +442,21 @@ def state_transitions(
     if p_exon < 1: p_exon = 1 / (1-p_exon)
     for i in range(len(p_intron)):
         if p_intron[i] < 1: p_intron[i] = 1 / (1-p_intron[i])
+
+    if isc == 1:
+        return state_transitions_simple(
+            share_frames=share_frames,
+            share_noncoding=share_noncoding,
+            p_exon=p_exon,
+            p_intron=p_intron[0],
+            p_IR=p_IR,
+            heads=heads,
+        )
+    elif share_noncoding or not share_frames:
+        raise ValueError(
+            "Intron state chains do not work with non-default share"
+            " configurations."
+        )
 
     indices = np.array([
         # IR -> IR -> START -> E1 -> STOP -> IR

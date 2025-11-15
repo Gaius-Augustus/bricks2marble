@@ -17,7 +17,9 @@ class AnnotationHMMConfig(ModelConfig):
     stop_codons: list[tuple[str, float]] = [
         ("TAG", .34), ("TAA", .33), ("TGA", .33),
     ]
-    intron_begin_pattern: list[tuple[str, float]] = [("NGT", 1.)]
+    intron_begin_pattern: list[tuple[str, float]] = [
+        ("NGT", 0.99), ("NGC", 0.01),
+    ]
     intron_end_pattern: list[tuple[str, float]] = [("AGN", 1.)]
 
     heads: int = 1
@@ -44,6 +46,8 @@ class AnnotationHMMConfig(ModelConfig):
     initial_intron_len: int | float | list[float | int] | None = None
     initial_ir_len: int | float | None = None
     train_transitioner: bool = True
+    transitioner_share_noncoding: bool = False
+    transitioner_share_frames: bool = True
     uniform_N: bool = False
     nudge_IR: float = 0.0
     nudge_repeats_noncoding: float = 0.0
@@ -75,6 +79,8 @@ class AnnotationHMM(tf.keras.Layer):
             p_intron=self.config.initial_intron_len,
             p_exon=self.config.initial_exon_len,
             heads=heads,
+            share_frames=self.config.transitioner_share_frames,
+            share_noncoding=self.config.transitioner_share_noncoding,
         )
         starts, values_starts, share_starts = state_start_dist(
             isc=self.config.intron_state_chain,
