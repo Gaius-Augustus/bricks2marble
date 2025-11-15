@@ -361,17 +361,19 @@ def state_transitions_simple(
     if share_noncoding:
         share += [[0, 4], [4, 8]]
         values += [np.log(p_IR - 1), 0]
+        values += 3 * [0]
     elif share_frames:
         share += [[1, 4]]
         share += [[5, 8]]
-        values += [np.log(p_IR - 1), np.log(p_intron - 1), 0, 0]
+        share += [[8, 11]]
+        values += [np.log(p_IR - 1), np.log(p_intron - 1), 0, 0, 0]
     else:
         share = None
         values += [np.log(p_IR - 1)]
         values += 3 * [np.log(p_intron - 1)]
         values += 4 * [0]
+        values += 3 * [0]
 
-    values += 3* [0]
     values += [0, np.log(1/2), 0]
     values += 3 * [np.log(p_exon - 1)]
     values += [0, np.log(1/2), 0]
