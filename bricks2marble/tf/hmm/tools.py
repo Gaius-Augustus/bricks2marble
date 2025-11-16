@@ -252,7 +252,7 @@ def emission_parameters(
 ) -> tuple[
     np.ndarray | tf.keras.Initializer,
     list[tuple[int, int, int]],
-    list[tuple[int, int]]
+    list[tuple[int, int]] | None
 ]:
     allow = [
         (h, i, k)
@@ -288,6 +288,9 @@ def emission_parameters(
                 for i in range(D)
             ]
         )
+
+    if len(share) == 0:
+        share = None
 
     return tf.keras.initializers.GlorotNormal(), allow, share
 
