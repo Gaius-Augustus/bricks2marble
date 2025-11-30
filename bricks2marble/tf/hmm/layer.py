@@ -11,6 +11,46 @@ from .tools import (emission_parameters, get_nuc_emission_distribution,
                     state_transitions)
 
 
+class TransitionScorerConfig(ModelConfig):
+
+    input_size: int | None = None
+    output_size: int | None = None
+    activation : str = "swish"
+    latent_factor: float = 2.0
+
+
+class TransitionScorer(tf.keras.Layer):
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__()
+        self.config = TransitionScorerConfig(**kwargs)
+
+    def build(self, input_shape: tuple[int | None, ...]) -> None:
+        d_latent = int(self.config.latent_factor * self.config.input_size)
+        self.kernel_1 = self.add_weight(
+            shape=(self.config.input_size, d_latent),
+            initializer=tf.keras.initializers.GlorotNormal(),
+        )
+        self.bias_1 = self.add_weight(
+            shape=(d_latent, ),
+            initializer=tf.keras.initializers.Zeros(),
+        )
+        self.kernel_2 = self.add_weight(
+            shape=(d_latent, self.config.output_size),
+            initializer=tf.keras.initializers.GlorotNormal(),
+        )
+        self.activation = tf.keras.activations.get(self.config.activation)
+
+    def call(self, x: tf.Tensor) -> tf.Tensor:
+        return tf.einsum(
+            "...v,vo->...o",
+            self.activation(
+                tf.einsum("...d,dv->...v", x, self.kernel_1) + self.bias_1
+            ),
+            self.kernel_2,
+        )
+
+
 class AnnotationHMMConfig(ModelConfig):
 
     start_codons: list[tuple[str, float]] = [("ATG", 1.)]
@@ -48,6 +88,7 @@ class AnnotationHMMConfig(ModelConfig):
     train_transitioner: bool = True
     transitioner_share_noncoding: bool = False
     transitioner_share_frames: bool = True
+    transition_scorer: TransitionScorerConfig | None = None
     uniform_N: bool = False
     nudge_IR: float = 0.0
     nudge_repeats_noncoding: float = 0.0
@@ -138,6 +179,13 @@ class AnnotationHMM(tf.keras.Layer):
             else:
                 self.hmm = hmm
 
+        if self.config.transition_scorer is not None:
+            self.transition_scorer = TransitionScorer(
+                **self.config.transition_scorer.model_dump() | {
+                    "output_size": len(values_transitions)
+                }
+            )
+
         if self.config.nudge_IR > 0:
             self.regularizer = UncertainPredictionRegularizer(
                 weight=self.config.nudge_IR,
@@ -197,6 +245,8 @@ class AnnotationHMM(tf.keras.Layer):
                 intron_state_chain=self.config.intron_state_chain,
                 start_value=intron_value,
             )
+        if self.config.transition_scorer is not None:
+            self.transition_scorer.build(input_shape)
 
     def state_names(self) -> list[str]:
         return state_names(self.config.intron_state_chain)
@@ -205,7 +255,8 @@ class AnnotationHMM(tf.keras.Layer):
         self,
         x: tf.Tensor,
         nuc: tf.Tensor,
-    ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor | None]:
+        transition_scores: tf.Tensor | None = None,
+    ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor | None, tf.Tensor | None]:
         if self.config.nudge_repeats_noncoding > 0:
             five = 4 if self.config.uniform_N else 5
             r = nuc[..., five:five+1]
@@ -219,9 +270,14 @@ class AnnotationHMM(tf.keras.Layer):
             nuc_reverse = tf.reverse(nuc_reverse, [-2])
             nuc = tf.concat((nuc, nuc_reverse), axis=0)  # type: ignore
             x = tf.concat((x, tf.reverse(x, [-2])), axis=0)  # type: ignore
+            if transition_scores is not None:
+                transition_scores = tf.concat((
+                    transition_scores,
+                    tf.reverse(transition_scores, [-2]),
+                ), axis=0)  # type: ignore
         if self.config.nudge_repeats_noncoding > 0:
-            return x, nuc, r
-        return x, nuc, None
+            return x, nuc, r, transition_scores
+        return x, nuc, None, transition_scores
 
     def postprocess(
         self,
@@ -270,6 +326,7 @@ class AnnotationHMM(tf.keras.Layer):
         nuc_right: tf.Tensor,
         mode: HMMMode = HMMMode.POSTERIOR,
         parallel: int = 1,
+        transition_scores: tf.Tensor | None = None,
     ) -> tf.Tensor:
         if self.config.compute_heads_sequentially:
             if self.config.use_reverse_strand:
@@ -300,8 +357,14 @@ class AnnotationHMM(tf.keras.Layer):
                 hmm(x, nuc_left, nuc_right, mode=mode, parallel=parallel)
                 for hmm in self.hmm
             ], axis=2)  # type: ignore
+
+        if self.config.transition_scorer is not None:
+            scores = self.transition_scorer(transition_scores)
+        else:
+            scores = None
         return self.hmm(
             x, nuc_left, nuc_right,
+            transition_delta=scores,
             mode=mode,
             parallel=parallel,
         )  # type: ignore
@@ -313,18 +376,32 @@ class AnnotationHMM(tf.keras.Layer):
         mode: HMMMode = HMMMode.POSTERIOR,
         parallel: int = 1,
         training: bool = False,
+        transition_scores: tf.Tensor | None = None,
     ) -> tf.Tensor:
-        x, nuc, r = self.preprocess(x, nuc)
+        if (
+            transition_scores is None
+            and self.config.transition_scorer is not None
+        ):
+            transition_scores = x
+        x, nuc, r, transition_scores = self.preprocess(
+            x, nuc, transition_scores,
+        )
         nuc_left, nuc_right = left_right_3mers(
             nuc,
             uniform_N=self.config.uniform_N,
         )
-        x = self.call_HMM(x, nuc_left, nuc_right, mode=mode, parallel=parallel)
+        x = self.call_HMM(
+            x,
+            nuc_left, nuc_right,
+            mode=mode,
+            parallel=parallel,
+            transition_scores=transition_scores,
+        )
         x = self.postprocess(x, mode=mode, training=training)
         if self.config.nudge_IR > 0 and training: self.regularizer(x)
         if self.config.nudge_repeats_noncoding > 0 and training:
             self.repeats_regularizer(x, r)
-        if self.config.intron_regularization > 0:
+        if self.config.intron_regularization > 0 and training:
             if self.config.compute_heads_sequentially:
                 matrix = tf.concat([
                     hmm.transitioner.matrix() for hmm in self.hmm
@@ -332,7 +409,7 @@ class AnnotationHMM(tf.keras.Layer):
             else:
                 matrix = self.hmm.transitioner.matrix()
             self.intron_regularizer(matrix)
-        if self.config.ir_intron_ratio_regularization > 0:
+        if self.config.ir_intron_ratio_regularization > 0 and training:
             if self.config.compute_heads_sequentially:
                 matrix = tf.concat([
                     hmm.transitioner.matrix() for hmm in self.hmm
