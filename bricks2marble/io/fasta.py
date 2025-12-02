@@ -10,6 +10,8 @@ def load_fasta(
     T: int | None = None,
     drop_remainder: bool = False,
     restrict: int = -1,
+    n_seqs: int | None = None,
+    target_seq: str | None = None,
 ) -> FASTA:
     """Loads a :class:`FASTA` object that makes handling a nucleotide
     sequence easier.
@@ -27,6 +29,11 @@ def load_fasta(
         restrict (int, optional): Restrict the reading window. Only
             reads the given number of nucleotides from the file.
             Defaults to -1, which means everything is read.
+        n_seqs (int, optional): Stops reading the fasta file after this
+            many sequences. Defaults to reading all sequences.
+        target_seq (str, optional): Scans the FASTA file from the start
+            up to the given sequence name and then only returns this
+            sequence. Defaults to all sequences.
     """
     with open(path, "r", encoding="utf-8") as f:
         lines = f.readlines(restrict)
@@ -37,8 +44,14 @@ def load_fasta(
     for line in lines:
         if line.startswith(">"):
             if current_sequence:
+                if target_seq is not None and name_sequences[-1] == target_seq:
+                    name_sequences = [name_sequences[-1]]
+                    raw_sequences = [current_sequence.encode()]
+                    break
                 raw_sequences.append(current_sequence.encode())
                 current_sequence = ""
+                if n_seqs is not None and len(name_sequences) == n_seqs:
+                    break
             name_sequences.append(line[1:].strip())
         else:
             current_sequence += line.strip()
