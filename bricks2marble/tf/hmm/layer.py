@@ -1,3 +1,5 @@
+from typing import Literal
+
 import tensorflow as tf
 from hidten import HMMMode
 from hidten.config import ModelConfig, with_config
@@ -14,12 +16,21 @@ from .tools import (emission_parameters, get_nuc_emission_distribution,
 class TransitionScorerConfig(ModelConfig):
 
     input_size: int | None = None
-    output_size: int | None = None
     activation : str = "swish"
     latent_factor: float = 2.0
+    out_activation: str | None = None
 
 
 class TransitionScorer(tf.keras.Layer):
+    """Layer that calculates the transition deltas which are added on
+    top of the kernel of the transition matrix:
+    ```
+        A = softmax(kernel + delta(x))
+    ```
+
+    Currently, this layer is only configured for learnable transition
+    matrices with one intron state per frame.
+    """
 
     def __init__(self, **kwargs) -> None:
         super().__init__()
@@ -36,19 +47,32 @@ class TransitionScorer(tf.keras.Layer):
             initializer=tf.keras.initializers.Zeros(),
         )
         self.kernel_2 = self.add_weight(
-            shape=(d_latent, self.config.output_size),
+            shape=(d_latent, 7),
             initializer=tf.keras.initializers.GlorotNormal(),
         )
         self.activation = tf.keras.activations.get(self.config.activation)
+        if self.config.out_activation is not None:
+            self.out_activation = tf.keras.activations.get(
+                self.config.out_activation
+            )
 
     def call(self, x: tf.Tensor) -> tf.Tensor:
-        return tf.einsum(
+        B, T, _ = tf.unstack(tf.shape(x))
+        scores = tf.einsum(
             "...v,vo->...o",
             self.activation(
                 tf.einsum("...d,dv->...v", x, self.kernel_1) + self.bias_1
             ),
             self.kernel_2,
         )
+        if self.config.out_activation is not None:
+            scores = self.out_activation(scores)
+        return tf.concat((
+            scores[:, :, :4],
+            tf.zeros((B, T, 10), dtype=scores.dtype),
+            scores[:, :, 4:],
+            tf.zeros((B, T, 6), dtype=scores.dtype),
+        ), axis=-1)
 
 
 class AnnotationHMMConfig(ModelConfig):
@@ -180,10 +204,17 @@ class AnnotationHMM(tf.keras.Layer):
                 self.hmm = hmm
 
         if self.config.transition_scorer is not None:
+            if (
+                self.config.transitioner_share_frames
+                or self.config.transitioner_share_noncoding
+                or not self.config.train_transitioner
+            ):
+                raise ValueError(
+                    "Input dependent transitions are currently only"
+                    " implemented for independently trained transitions."
+                )
             self.transition_scorer = TransitionScorer(
-                **self.config.transition_scorer.model_dump() | {
-                    "output_size": len(values_transitions)
-                }
+                **self.config.transition_scorer.model_dump()
             )
 
         if self.config.nudge_IR > 0:
@@ -324,7 +355,7 @@ class AnnotationHMM(tf.keras.Layer):
         x: tf.Tensor,
         nuc_left: tf.Tensor,
         nuc_right: tf.Tensor,
-        mode: HMMMode = HMMMode.POSTERIOR,
+        mode: HMMMode | Literal["A"] = HMMMode.POSTERIOR,
         parallel: int = 1,
         transition_scores: tf.Tensor | None = None,
     ) -> tf.Tensor:
@@ -362,6 +393,8 @@ class AnnotationHMM(tf.keras.Layer):
             scores = self.transition_scorer(transition_scores)
         else:
             scores = None
+        if mode == "A":
+            return self.hmm.transitioner.matrix(transition_delta=scores)
         return self.hmm(
             x, nuc_left, nuc_right,
             transition_delta=scores,

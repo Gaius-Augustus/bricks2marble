@@ -615,12 +615,13 @@ def state_start_dist(
     indices = np.array([
         [h, j] for h in range(heads) for j in range(12+3*isc)
     ])
-    values = np.array([
-        np.log(100),
-        np.log(4),
-        np.log(10), np.log(20), np.log(10),
-        0,
-    ], dtype=np.float32)
+    # values = np.array([
+    #     np.log(100),
+    #     np.log(4),
+    #     np.log(10), np.log(20), np.log(10),
+    #     0,
+    # ], dtype=np.float32)
+    values = np.random.normal(loc=0, scale=0.01, size=6)
     values = np.exp(values) / np.sum(np.exp(values), -1, keepdims=True)
     values = np.tile(values, heads)
 
