@@ -362,7 +362,11 @@ def plot_comparison(
 
     SymbolValidator = ValidatorCache.get_validator("scatter.marker", "symbol")
     raw_symbols = SymbolValidator.values[2:19*12:12]
+    while len(metrics) > len(raw_symbols):
+        raw_symbols += SymbolValidator.values[2:19*12:12]
     colors = px.colors.qualitative.Plotly
+    while len(metrics) > len(colors):
+        colors += px.colors.qualitative.Plotly
 
     if table:
         table_rows = [[] for _ in range(len(keys))]
@@ -393,7 +397,7 @@ def plot_comparison(
                 y=[y],
                 name=labels[i],
                 marker=dict(
-                    symbol=raw_symbols[i%10],
+                    symbol=raw_symbols[i],
                     color=colors[i],
                     size=8,
                 ),
