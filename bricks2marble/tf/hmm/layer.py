@@ -16,9 +16,12 @@ from .tools import (emission_parameters, get_nuc_emission_distribution,
 class TransitionScorerConfig(ModelConfig):
 
     input_size: int | None = None
-    activation : str = "swish"
+    activation: str = "swish"
     latent_factor: float = 2.0
     out_activation: str | None = None
+
+    norm: Literal["layer", "batch"] | None = None
+    regularization: float | None = None
 
 
 class TransitionScorer(tf.keras.Layer):
@@ -37,36 +40,45 @@ class TransitionScorer(tf.keras.Layer):
         self.config = TransitionScorerConfig(**kwargs)
 
     def build(self, input_shape: tuple[int | None, ...]) -> None:
-        d_latent = int(self.config.latent_factor * self.config.input_size)
-        self.kernel_1 = self.add_weight(
-            shape=(self.config.input_size, d_latent),
-            initializer=tf.keras.initializers.GlorotNormal(),
-        )
-        self.bias_1 = self.add_weight(
-            shape=(d_latent, ),
-            initializer=tf.keras.initializers.Zeros(),
-        )
-        self.kernel_2 = self.add_weight(
-            shape=(d_latent, 7),
-            initializer=tf.keras.initializers.GlorotNormal(),
-        )
-        self.activation = tf.keras.activations.get(self.config.activation)
-        if self.config.out_activation is not None:
-            self.out_activation = tf.keras.activations.get(
-                self.config.out_activation
+        if self.config.input_size is None:
+            raise RuntimeError(
+                "Undetermined input size to TransitionScorer. Has to be "
+                "manually given by super-layers."
             )
+        if self.config.norm == "layer":
+            self.norm = tf.keras.layers.LayerNormalization()
+        elif self.config.norm == "batch":
+            self.norm = tf.keras.layers.BatchNormalization()
+        if self.config.norm is not None:
+            self.norm.build(input_shape[:-1] + (self.config.input_size, ))
+        d_latent = int(self.config.latent_factor * self.config.input_size)
+
+        self.f1 = tf.keras.layers.Dense(
+            units=d_latent,
+            use_bias=True,
+            activation=self.config.activation,
+            kernel_initializer=tf.keras.initializers.GlorotNormal(),
+        )
+        self.f1.build(input_shape[:-1] + (self.config.input_size, ))
+        self.f2 = tf.keras.layers.Dense(
+            units=7,
+            use_bias=False,
+            activation=self.config.out_activation,
+            kernel_initializer=tf.keras.initializers.GlorotNormal(),
+        )
+        self.f2.build(input_shape[:-1] + (d_latent, ))
 
     def call(self, x: tf.Tensor) -> tf.Tensor:
         B, T, _ = tf.unstack(tf.shape(x))
-        scores = tf.einsum(
-            "...v,vo->...o",
-            self.activation(
-                tf.einsum("...d,dv->...v", x, self.kernel_1) + self.bias_1
-            ),
-            self.kernel_2,
-        )
-        if self.config.out_activation is not None:
-            scores = self.out_activation(scores)
+        if self.config.norm is not None:
+            x = self.norm(x)
+        scores = self.f2(self.f1(x))
+        if self.config.regularization is not None:
+            self.add_loss(
+                self.config.regularization * tf.reduce_mean(
+                    tf.sqrt(tf.reduce_sum(scores**2, axis=-1))
+                )
+            )
         return tf.concat((
             scores[:, :, :4],
             tf.zeros((B, T, 10), dtype=scores.dtype),
@@ -90,7 +102,6 @@ class AnnotationHMMConfig(ModelConfig):
     dropout_heads: float = 0
     compute_heads_sequentially: bool = False
     use_reverse_strand: bool = False
-    parallel_factor: int = 1
 
     emitter_share_noncoding: bool = False
     """Shares noncoding state emission parameters."""
