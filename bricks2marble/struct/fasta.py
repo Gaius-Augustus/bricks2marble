@@ -339,7 +339,7 @@ class Sequence:
 
     def string(self) -> str:
         """Returns the string representation of this sequence as one
-        long seqeunce of nucleotides.
+        long sequence of nucleotides.
         """
         translation_table = bytes.maketrans(
             bytes([0, 1, 2, 3, 4, 5, 6, 7, 8]),

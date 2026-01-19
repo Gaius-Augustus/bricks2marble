@@ -9,8 +9,8 @@ from ..loss import (IntronParameterRegularizer, IRIntronRatioRegularizer,
                     RepeatsNonCodingRegularizer,
                     UncertainPredictionRegularizer)
 from .tools import (emission_parameters, get_nuc_emission_distribution,
-                    left_right_3mers, state_names, state_start_dist,
-                    state_transitions)
+                    get_repeats_at_borders_multiplier, left_right_3mers,
+                    state_names, state_start_dist, state_transitions)
 
 
 class TransitionScorerConfig(ModelConfig):
@@ -130,6 +130,15 @@ class AnnotationHMMConfig(ModelConfig):
     intron_regularization: float = 0.0
     ir_intron_ratio_regularization: float = 0.0
 
+    repeats_at_borders: float | None = None
+
+    @property
+    def repeats_in_nuc(self) -> bool:
+        return (
+            self.nudge_repeats_noncoding > 0
+            or self.repeats_at_borders is not None
+        )
+
     @property
     def n_states(self) -> int:
         return 12 + 3*self.intron_state_chain
@@ -228,6 +237,17 @@ class AnnotationHMM(tf.keras.Layer):
                 **self.config.transition_scorer.model_dump()
             )
 
+        if self.config.repeats_at_borders is not None:
+            leftrb, rightrb = get_repeats_at_borders_multiplier(
+                self.config.repeats_at_borders,
+                self.config.start_codons,
+                self.config.intron_begin_pattern,
+                self.config.stop_codons,
+                self.config.intron_end_pattern,
+            )
+            self.left_repeats_borders = tf.Variable(leftrb, trainable=False)
+            self.right_repeats_borders = tf.Variable(rightrb, trainable=False)
+
         if self.config.nudge_IR > 0:
             self.regularizer = UncertainPredictionRegularizer(
                 weight=self.config.nudge_IR,
@@ -299,7 +319,7 @@ class AnnotationHMM(tf.keras.Layer):
         nuc: tf.Tensor,
         transition_scores: tf.Tensor | None = None,
     ) -> tuple[tf.Tensor, tf.Tensor, tf.Tensor | None, tf.Tensor | None]:
-        if self.config.nudge_repeats_noncoding > 0:
+        if self.config.repeats_in_nuc:
             five = 4 if self.config.uniform_N else 5
             r = nuc[..., five:five+1]
             nuc = nuc[..., :five]
@@ -317,7 +337,7 @@ class AnnotationHMM(tf.keras.Layer):
                     transition_scores,
                     tf.reverse(transition_scores, [-2]),
                 ), axis=0)  # type: ignore
-        if self.config.nudge_repeats_noncoding > 0:
+        if self.config.repeats_in_nuc:
             return x, nuc, r, transition_scores
         return x, nuc, None, transition_scores
 
@@ -433,6 +453,15 @@ class AnnotationHMM(tf.keras.Layer):
         nuc_left, nuc_right = left_right_3mers(
             nuc,
             uniform_N=self.config.uniform_N,
+            repeats=r,
+            left_factor=(
+                self.left_repeats_borders
+                if self.config.repeats_at_borders is not None else None
+            ),
+            right_factor=(
+                self.right_repeats_borders
+                if self.config.repeats_at_borders is not None else None
+            ),
         )
         x = self.call_HMM(
             x,

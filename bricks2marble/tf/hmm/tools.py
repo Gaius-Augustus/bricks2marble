@@ -125,6 +125,9 @@ def make_kmer(
 def left_right_3mers(
     nuc: tf.Tensor,
     uniform_N: bool = False,
+    repeats: tf.Tensor | None = None,
+    left_factor: tf.Tensor | None = None,
+    right_factor: tf.Tensor | None = None,
 ) -> tuple[tf.Tensor, tf.Tensor]:
     left_3mers = tf.concat([
         make_kmer(
@@ -152,6 +155,13 @@ def left_right_3mers(
             dtype=nuc.dtype,  # type: ignore
         ) / 64,
     ], axis=-1)
+
+    if repeats is not None:
+        repeats = tf.concat((repeats, tf.reverse(repeats, [1])), 0)
+    if left_factor is not None:
+        left_3mers = left_3mers * (1.0 + repeats * (left_factor - 1.0))
+    if right_factor is not None:
+        right_3mers = right_3mers * (1.0 + repeats * (right_factor - 1.0))
 
     return left_3mers, right_3mers  # type: ignore
 
@@ -240,6 +250,38 @@ def get_nuc_emission_distribution(
     )
 
     return left_codon_probs.numpy(), right_codon_probs.numpy()  # type: ignore
+
+
+def get_repeats_at_borders_multiplier(
+    f: float,
+    start_codons: list[tuple[str, float]],
+    stop_codons: list[tuple[str, float]],
+    intron_begin_pattern: list[tuple[str, float]],
+    intron_end_pattern: list[tuple[str, float]],
+) -> tuple[tf.Tensor, tf.Tensor]:
+    left_repeats_factor = f * (
+        tf.cast(make_codon_probs(start_codons, True) > 0, tf.float32)
+        + tf.cast(make_codon_probs(intron_begin_pattern, True) > 0, tf.float32)
+    )
+    right_repeats_factor = f * (
+        tf.cast(make_codon_probs(stop_codons, False) > 0, tf.float32)
+        + tf.cast(make_codon_probs(intron_end_pattern, False) > 0, tf.float32)
+    )
+    left_repeats_factor = (
+        left_repeats_factor + tf.cast(left_repeats_factor == 0, tf.float32)
+    )
+    right_repeats_factor = (
+        right_repeats_factor + tf.cast(right_repeats_factor == 0, tf.float32)
+    )
+    left_repeats_factor = tf.concat(
+        (left_repeats_factor, tf.ones((1, 1, 1))),
+        axis=-1,
+    )
+    right_repeats_factor = tf.concat(
+        (right_repeats_factor, tf.ones((1, 1, 1))),
+        axis=-1,
+    )
+    return left_repeats_factor, right_repeats_factor
 
 
 def emission_parameters(
