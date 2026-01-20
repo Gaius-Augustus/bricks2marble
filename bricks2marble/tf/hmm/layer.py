@@ -9,7 +9,8 @@ from ..loss import (IntronParameterRegularizer, IRIntronRatioRegularizer,
                     RepeatsNonCodingRegularizer,
                     UncertainPredictionRegularizer)
 from .tools import (emission_parameters, get_nuc_emission_distribution,
-                    get_repeats_at_borders_multiplier, left_right_3mers,
+                    get_repeats_at_borders_multiplier,
+                    get_repeats_emission_distribution, left_right_3mers,
                     state_names, state_start_dist, state_transitions)
 
 
@@ -113,6 +114,7 @@ class AnnotationHMMConfig(ModelConfig):
     activated one."""
     train_emitter: bool = True
     """Toggles training of the emitter."""
+    repeats_emitter: float | None = None
 
     intron_state_chain: int = 1
     intron_chain_skips: bool = False
@@ -137,6 +139,7 @@ class AnnotationHMMConfig(ModelConfig):
         return (
             self.nudge_repeats_noncoding > 0
             or self.repeats_at_borders is not None
+            or self.repeats_emitter is not None
         )
 
     @property
@@ -179,6 +182,12 @@ class AnnotationHMM(tf.keras.Layer):
             intron_state_chain=self.config.intron_state_chain,
             heads=heads,
         )
+        if self.config.repeats_emitter is not None:
+            emissions_repeats = get_repeats_emission_distribution(
+                self.config.repeats_emitter,
+                intron_state_chain=self.config.intron_state_chain,
+                heads=heads,
+            )
 
         nhmms = 1
         if self.config.compute_heads_sequentially:
@@ -217,6 +226,12 @@ class AnnotationHMM(tf.keras.Layer):
             hmm.add_emitter(stream_emitter)
             hmm.add_emitter(nuc_emitter_left)
             hmm.add_emitter(nuc_emitter_right)
+
+            if self.config.repeats_emitter is not None:
+                repeats_emitter = TFBernoulliEmitter()
+                repeats_emitter.initializer = emissions_repeats.flatten()
+                repeats_emitter.trainable = False
+                hmm.add_emitter(repeats_emitter)
 
             if self.config.compute_heads_sequentially:
                 self.hmm.append(hmm)
@@ -284,11 +299,19 @@ class AnnotationHMM(tf.keras.Layer):
             hmm.emitter[0].share = share
             hmm.emitter[0].initializer = init
             hmm.emitter[0].trainable = self.config.train_emitter
-            hmm.build((
-                input_shape,
-                input_shape[:-1] + (65, ),
-                input_shape[:-1] + (65, ),
-            ))
+            if self.config.repeats_emitter is None:
+                hmm.build((
+                    input_shape,
+                    input_shape[:-1] + (65, ),
+                    input_shape[:-1] + (65, ),
+                ))
+            else:
+                hmm.build((
+                    input_shape,
+                    input_shape[:-1] + (65, ),
+                    input_shape[:-1] + (65, ),
+                    input_shape[:-1] + (2, ),
+                ))
 
         if self.config.intron_regularization > 0:
             if self.config.compute_heads_sequentially:
@@ -338,6 +361,9 @@ class AnnotationHMM(tf.keras.Layer):
                     tf.reverse(transition_scores, [-2]),
                 ), axis=0)  # type: ignore
         if self.config.repeats_in_nuc:
+            if self.config.repeats_emitter is not None:
+                r = tf.concat((r, tf.reverse(r, [1])), 0)
+                r = tf.stack([1.0 - r, r], axis=-1)
             return x, nuc, r, transition_scores
         return x, nuc, None, transition_scores
 
@@ -386,6 +412,7 @@ class AnnotationHMM(tf.keras.Layer):
         x: tf.Tensor,
         nuc_left: tf.Tensor,
         nuc_right: tf.Tensor,
+        repeats: tf.Tensor | None = None,
         mode: HMMMode | Literal["A"] = HMMMode.POSTERIOR,
         parallel: int = 1,
         transition_scores: tf.Tensor | None = None,
@@ -426,6 +453,13 @@ class AnnotationHMM(tf.keras.Layer):
             scores = None
         if mode == "A":
             return self.hmm.transitioner.matrix(transition_delta=scores)
+        if self.config.repeats_emitter is not None:
+            return self.hmm(
+                x, nuc_left, nuc_right, repeats,
+                transition_delta=scores,
+                mode=mode,
+                parallel=parallel,
+            )  # type: ignore
         return self.hmm(
             x, nuc_left, nuc_right,
             transition_delta=scores,
@@ -453,7 +487,7 @@ class AnnotationHMM(tf.keras.Layer):
         nuc_left, nuc_right = left_right_3mers(
             nuc,
             uniform_N=self.config.uniform_N,
-            repeats=r,
+            repeats=r if self.config.repeats_at_borders is not None else None,
             left_factor=(
                 self.left_repeats_borders
                 if self.config.repeats_at_borders is not None else None
@@ -466,6 +500,7 @@ class AnnotationHMM(tf.keras.Layer):
         x = self.call_HMM(
             x,
             nuc_left, nuc_right,
+            repeats=r if self.config.repeats_emitter is not None else None,
             mode=mode,
             parallel=parallel,
             transition_scores=transition_scores,

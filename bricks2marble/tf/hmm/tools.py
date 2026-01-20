@@ -166,6 +166,31 @@ def left_right_3mers(
     return left_3mers, right_3mers  # type: ignore
 
 
+def get_repeats_emission_distribution(
+    f: float,
+    intron_state_chain: int = 1,
+    heads: int = 1,
+) -> np.ndarray:
+    """Generates an emission probability matrix for encoding repeat
+    information that downscales probabilities of coding regions within
+    repeats.
+
+    Returns:
+        np.ndarray: Array of shape ``(heads, 12+3*isc, 2)``, where
+            ``isc`` is the intron_state_chain argument.
+    """
+    emission = np.r_[
+        np.ones((1+3*intron_state_chain), dtype=np.float32),
+        np.full((11, ), fill_value=f, dtype=np.float32),
+    ]
+    emission = np.c_[
+        np.ones_like(emission, dtype=np.float32),
+        emission,
+    ]
+    emission = np.repeat(emission[np.newaxis, ...], repeats=heads, axis=0)
+    return emission
+
+
 def get_nuc_emission_distribution(
     start_codons: list[tuple[str, float]],
     stop_codons: list[tuple[str, float]],
