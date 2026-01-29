@@ -1,3 +1,4 @@
+import gzip
 from pathlib import Path
 
 import numpy as np
@@ -14,7 +15,7 @@ def load_fasta(
     target_seq: str | None = None,
 ) -> FASTA:
     """Loads a :class:`FASTA` object that makes handling a nucleotide
-    sequence easier.
+    sequence easier. Can be either a fasta file or a gzipped fasta file.
 
     Args:
         path (Path | str): Path to the fasta file.
@@ -35,8 +36,12 @@ def load_fasta(
             up to the given sequence name and then only returns this
             sequence. Defaults to all sequences.
     """
-    with open(path, "r", encoding="utf-8") as f:
-        lines = f.readlines(restrict)
+    if Path(path).suffix == ".gz":
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            lines = f.readlines(restrict)
+    else:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines(restrict)
 
     raw_sequences: list[bytes] = []
     name_sequences: list[str] = []
