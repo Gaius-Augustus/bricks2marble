@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import overload
 
+import numpy as np
 import plotly.express as px
 from plotly import graph_objects as go
 from plotly.subplots import make_subplots
@@ -325,10 +326,11 @@ def hex_to_rgba(hex_color: str, alpha: float = 0.5) -> str:
 def plot_comparison(
     metrics: Sequence[AnnotationComparison],
     labels: Sequence[str] | None = None,
-    zoom: bool = False,
+    zoom: bool = True,
     flip_axes: bool = False,
     missing_novel: bool = False,
     table: bool = False,
+    f1_curve: bool = True,
 ) -> go.Figure:
     keys = ["base", "intron", "transcript", "exon", "intron_chain", "locus"]
     fig = make_subplots(
@@ -371,8 +373,25 @@ def plot_comparison(
     if table:
         table_rows = [[] for _ in range(len(keys))]
         color_cols = [[] for _ in range(len(keys))]
+
+    bnds = {}
+    # bnds[key] = [sens lower, sens upper, prec lower, prec upper]
     for i, metric in enumerate(metrics):
         for j, key in enumerate(keys):
+            if i == 0:
+                bnds[key] = [
+                    getattr(metric, key).sensitivity,
+                    getattr(metric, key).sensitivity,
+                    getattr(metric, key).precision,
+                    getattr(metric, key).precision,
+                ]
+            else:
+                bnds[key] = [
+                    min(bnds.get(key)[0], getattr(metric, key).sensitivity),
+                    max(bnds.get(key)[1], getattr(metric, key).sensitivity),
+                    min(bnds.get(key)[2], getattr(metric, key).precision),
+                    max(bnds.get(key)[3], getattr(metric, key).precision),
+                ]
             row = j // 3 + 1
             col = j % 3 + 1
             x, y, f1 = (
@@ -407,6 +426,28 @@ def plot_comparison(
                 hoverinfo="text"
             ), row=row, col=col)
 
+            if f1_curve:
+                P = np.linspace(f1/2, 1, 100)
+                denom = 2*P - f1
+                R = np.full_like(P, np.nan)
+                valid = denom > 0
+                R[valid] = f1 * P[valid] / denom[valid]
+                inside = (P >= 0) & (P <= 1) & (R >= 0) & (R <= 1)
+                fig.add_trace(go.Scatter(
+                    x=P[inside],
+                    y=R[inside],
+                    name=labels[i],
+                    mode="lines",
+                    line=dict(
+                        color=colors[i],
+                        dash="dot",
+                        width=1,
+                    ),
+                    legendgroup=f"group {i}",
+                    hoverinfo="skip",
+                    showlegend=False,
+                ), row=row, col=col)
+
             missed = getattr(getattr(metric, key), "missed", None)
             novel = getattr(getattr(metric, key), "novel", None)
             if missing_novel and missed is not None and novel is not None:
@@ -439,25 +480,44 @@ def plot_comparison(
     for j, key in enumerate(keys):
         row = j // 3 + 1
         col = j % 3 + 1
+        bound_x = [
+            max(0, bnds[key][0 if not flip_axes else 2]-0.1),
+            min(1, bnds[key][1 if not flip_axes else 3]+0.1),
+        ]
+        bound_y = [
+            max(0, bnds[key][2 if not flip_axes else 0]-0.1),
+            min(1, bnds[key][3 if not flip_axes else 1]+0.1),
+        ]
+        bounds = [min(bound_x[0], bound_y[0]), max(bound_x[1], bound_y[1])]
         fig.update_xaxes(
-            range=[0, 1] if not zoom else None,
-            scaleanchor=f'y{j+1}' if not zoom else None,
+            range=[0, 1] if not zoom else bounds,
+            scaleanchor=f'y{j+1}',
             constrain='domain',
             row=row,
             col=col,
             dtick=.1 if not zoom else None,
+            minor=dict(
+                dtick=0.02,
+                showgrid=True,
+                gridcolor="rgba(0,0,0,0.05)",
+            ),
         )
         fig.update_yaxes(
-            range=[0, 1] if not zoom else None,
+            range=[0, 1] if not zoom else bounds,
             constrain='domain',
             row=row,
             col=col,
             dtick=.1 if not zoom else None,
+            minor=dict(
+                dtick=0.02,
+                showgrid=True,
+                gridcolor="rgba(0,0,0,0.05)",
+            ),
         )
-
+        axis_id = "" if j == 0 else str(j+1)
         fig.add_annotation(
             text="Sensitivity" if not flip_axes else "Precision",
-            xref=f"x{j+1}", yref=f"y{j+1}",
+            xref=f"x{axis_id} domain", yref=f"y{axis_id} domain",
             x=1.0, y=0,
             showarrow=False,
             font=dict(size=14),
@@ -466,7 +526,7 @@ def plot_comparison(
         )
         fig.add_annotation(
             text="Precision" if not flip_axes else "Sensitivity",
-            xref=f"x{j+1}", yref=f"y{j+1}",
+            xref=f"x{axis_id} domain", yref=f"y{axis_id} domain",
             x=0, y=1.0,
             showarrow=False,
             font=dict(size=14),
@@ -498,7 +558,7 @@ def plot_comparison(
         )
 
     fig.update_layout(
-        width=1000,
+        width=1200,
         height=600
                + (300 if missing_novel else 0)
                + (200+50*len(metrics) if table else 0),
