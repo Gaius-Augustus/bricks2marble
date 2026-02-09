@@ -8,7 +8,8 @@ from hidten.tf import TFHMM, TFBernoulliEmitter, TFCategoricalEmitter
 from ..loss import (IntronParameterRegularizer, IRIntronRatioRegularizer,
                     RepeatsNonCodingRegularizer,
                     UncertainPredictionRegularizer)
-from .tools import (emission_parameters, get_nuc_emission_distribution,
+from .tools import (emission_parameters, emission_parameters_eye,
+                    get_nuc_emission_distribution,
                     get_repeats_at_borders_multiplier,
                     get_repeats_emission_distribution, left_right_3mers,
                     state_names, state_start_dist, state_transitions)
@@ -112,6 +113,10 @@ class AnnotationHMMConfig(ModelConfig):
     emitter_sigmoid_activation: bool = False
     """Uses a sigmoid activated emission matrix instead of softmax
     activated one."""
+    emitter_eye: float | None = None
+    """Replaces the stream emitter by an identity matrix that has an
+    epsilon removed from the main diagonal and distributed to all other
+    columns."""
     train_emitter: bool = True
     """Toggles training of the emitter."""
     repeats_emitter: float | None = None
@@ -210,7 +215,10 @@ class AnnotationHMM(tf.keras.Layer):
 
             hmm.transitioner.trainable = self.config.train_transitioner
 
-            if self.config.emitter_sigmoid_activation:
+            if (
+                self.config.emitter_sigmoid_activation
+                and self.config.emitter_eye is None
+            ):
                 stream_emitter = TFBernoulliEmitter()
             else:
                 stream_emitter = TFCategoricalEmitter()
@@ -287,16 +295,22 @@ class AnnotationHMM(tf.keras.Layer):
         H = 1 if self.config.compute_heads_sequentially else self.config.heads
         isc = self.config.intron_state_chain
 
-        init, allow, share = emission_parameters(
-            D=D, S=S, H=H, isc=isc,
-            share_noncoding=self.config.emitter_share_noncoding,
-            share_frames=self.config.emitter_share_frames,
-        )
+        if self.config.emitter_eye is not None:
+            init, allow, share = emission_parameters_eye(
+                D=D, S=S, H=H, epsilon=self.config.emitter_eye,
+            )
+        else:
+            init, allow, share = emission_parameters(
+                D=D, S=S, H=H, isc=isc,
+                share_noncoding=self.config.emitter_share_noncoding,
+                share_frames=self.config.emitter_share_frames,
+            )
         for hmm in (
             self.hmm if self.config.compute_heads_sequentially else [self.hmm]
         ):
             hmm.emitter[0].allow = allow
-            hmm.emitter[0].share = share
+            if share is not None:
+                hmm.emitter[0].share = share
             hmm.emitter[0].initializer = init
             hmm.emitter[0].trainable = self.config.train_emitter
             if self.config.repeats_emitter is None:

@@ -1,5 +1,6 @@
 import numpy as np
 import tensorflow as tf
+from hidten.tf.util import safe_log
 
 
 def is_codon_distribution(codons: list[tuple[str, float]]) -> bool:
@@ -360,6 +361,32 @@ def emission_parameters(
         share = None
 
     return tf.keras.initializers.GlorotNormal(), allow, share
+
+
+def emission_parameters_eye(
+    D: int,
+    S: int,
+    H: int,
+    epsilon: float = 0,
+) -> tuple[
+    np.ndarray | tf.keras.Initializer,
+    list[tuple[int, int, int]],
+    list[tuple[int, int]] | None
+]:
+    allow = [
+        (h, i, k)
+        for h, states in enumerate([S]*H)
+        for k in range(D)
+        for i in range(states)
+    ]
+
+    values = np.eye(S, dtype=np.float32)
+    values += epsilon / (S-1)
+    values[np.diag_indices(S)] -= epsilon * (1 + 1 / (S-1))
+    values = values.flatten()
+    values = safe_log(values)
+
+    return tf.keras.initializers.Constant(values), allow, None
 
 
 def state_transitions_simple(
