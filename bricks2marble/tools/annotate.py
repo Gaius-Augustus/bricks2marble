@@ -563,12 +563,13 @@ def _GTF_from_model_liberal(
             f"Repredicting {total} sequences.",
             flush=True,
         )
+
         repred_fwd, repred_bwd = predict_func(FASTA(repred_seqs))
 
-    if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Merging repredictions.",
-        flush=True,
-    )
+        if verbose: print(
+            f"[{default_timer()-start_time:.4f}s] Merging repredictions.",
+            flush=True,
+        )
 
     for k, i in enumerate(repred_index):
         strand = repred_strand[k]
@@ -603,10 +604,7 @@ def _GTF_from_model_liberal(
                 labels_fwd[shift:shift+seq.N, :].flatten(),
                 strand="+",
             )
-            _, txs, last = _transcripts_from_regions(
-                regions,
-                seperate_first=False,
-            )
+            _, txs, _ = _transcripts_from_regions(regions, seperate_first=True)
             if seq.name not in entries_fwd:
                 entries_fwd[seq.name] = []
             entries_fwd[seq.name] += txs
@@ -616,10 +614,7 @@ def _GTF_from_model_liberal(
                 labels_bwd[shift:shift+seq.N, :].flatten(),
                 strand="-",
             )
-            _, txs, last = _transcripts_from_regions(
-                regions,
-                seperate_first=False,
-            )
+            _, txs, _ = _transcripts_from_regions(regions, seperate_first=True)
             if seq.name not in entries_bwd:
                 entries_bwd[seq.name] = []
             entries_bwd[seq.name] += txs
