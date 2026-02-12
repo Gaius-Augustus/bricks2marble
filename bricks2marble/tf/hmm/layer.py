@@ -117,6 +117,9 @@ class AnnotationHMMConfig(ModelConfig):
     """Replaces the stream emitter by an identity matrix that has an
     epsilon removed from the main diagonal and distributed to all other
     columns."""
+    emitter_prior: float | None = None
+    """Adds an additional, frozen emitter to the HMM that has the same
+    attributes as `emitter_eye`."""
     train_emitter: bool = True
     """Toggles training of the emitter."""
     repeats_emitter: float | None = None
@@ -235,6 +238,11 @@ class AnnotationHMM(tf.keras.Layer):
             hmm.add_emitter(nuc_emitter_left)
             hmm.add_emitter(nuc_emitter_right)
 
+            if self.config.emitter_prior is not None:
+                prior_emitter = TFCategoricalEmitter()
+                prior_emitter.trainable = False
+                hmm.add_emitter(prior_emitter)
+
             if self.config.repeats_emitter is not None:
                 repeats_emitter = TFBernoulliEmitter()
                 repeats_emitter.initializer = emissions_repeats.flatten()
@@ -297,7 +305,7 @@ class AnnotationHMM(tf.keras.Layer):
 
         if self.config.emitter_eye is not None:
             init, allow, share = emission_parameters_eye(
-                D=D, S=S, H=H, epsilon=self.config.emitter_eye,
+                D=S, S=S, H=H, epsilon=self.config.emitter_eye,
             )
         else:
             init, allow, share = emission_parameters(
@@ -305,6 +313,12 @@ class AnnotationHMM(tf.keras.Layer):
                 share_noncoding=self.config.emitter_share_noncoding,
                 share_frames=self.config.emitter_share_frames,
             )
+
+        if self.config.emitter_prior is not None:
+            prior_init, prior_allow, prior_share = emission_parameters_eye(
+                D=H*S, S=S, H=H, epsilon=self.config.emitter_prior,
+            )
+
         for hmm in (
             self.hmm if self.config.compute_heads_sequentially else [self.hmm]
         ):
@@ -313,19 +327,20 @@ class AnnotationHMM(tf.keras.Layer):
                 hmm.emitter[0].share = share
             hmm.emitter[0].initializer = init
             hmm.emitter[0].trainable = self.config.train_emitter
-            if self.config.repeats_emitter is None:
-                hmm.build((
-                    input_shape,
-                    input_shape[:-1] + (65, ),
-                    input_shape[:-1] + (65, ),
-                ))
-            else:
-                hmm.build((
-                    input_shape,
-                    input_shape[:-1] + (65, ),
-                    input_shape[:-1] + (65, ),
-                    input_shape[:-1] + (2, ),
-                ))
+            build_shape = (
+                input_shape,
+                input_shape[:-1] + (65, ),
+                input_shape[:-1] + (65, ),
+            )
+            if self.config.emitter_prior is not None:
+                hmm.emitter[3].allow = prior_allow
+                if prior_share is not None:
+                    hmm.emitter[3].share = prior_share
+                hmm.emitter[3].initializer = prior_init
+                build_shape = build_shape + (input_shape[:-1] + (H*S, ), )
+            if self.config.repeats_emitter is not None:
+                build_shape = build_shape + (input_shape[:-1] + (2, ), )
+            hmm.build(build_shape)
 
         if self.config.intron_regularization > 0:
             if self.config.compute_heads_sequentially:
@@ -430,6 +445,7 @@ class AnnotationHMM(tf.keras.Layer):
         mode: HMMMode | Literal["A"] = HMMMode.POSTERIOR,
         parallel: int = 1,
         transition_scores: tf.Tensor | None = None,
+        prior: tf.Tensor | None = None,
     ) -> tf.Tensor:
         if self.config.compute_heads_sequentially:
             if self.config.use_reverse_strand:
@@ -467,15 +483,13 @@ class AnnotationHMM(tf.keras.Layer):
             scores = None
         if mode == "A":
             return self.hmm.transitioner.matrix(transition_delta=scores)
+        emissions = (x, nuc_left, nuc_right)
+        if self.config.emitter_prior is not None:
+            emissions = emissions + (prior, )
         if self.config.repeats_emitter is not None:
-            return self.hmm(
-                x, nuc_left, nuc_right, repeats,
-                transition_delta=scores,
-                mode=mode,
-                parallel=parallel,
-            )  # type: ignore
+            emissions = emissions + (repeats, )
         return self.hmm(
-            x, nuc_left, nuc_right,
+            *emissions,
             transition_delta=scores,
             mode=mode,
             parallel=parallel,
@@ -489,6 +503,7 @@ class AnnotationHMM(tf.keras.Layer):
         parallel: int = 1,
         training: bool = False,
         transition_scores: tf.Tensor | None = None,
+        prior: tf.Tensor | None = None,
     ) -> tf.Tensor:
         if (
             transition_scores is None
@@ -518,6 +533,7 @@ class AnnotationHMM(tf.keras.Layer):
             mode=mode,
             parallel=parallel,
             transition_scores=transition_scores,
+            prior=prior,
         )
         x = self.postprocess(x, mode=mode, training=training)
         if self.config.nudge_IR > 0 and training: self.regularizer(x)
