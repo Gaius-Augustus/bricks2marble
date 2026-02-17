@@ -465,18 +465,18 @@ def _merge_replace_center(
     right: np.ndarray,
     center: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    T_half = left.shape[0] // 2
-    left_match = np.where((left[T_half:] - center[:T_half])[::-1] == 0)[0]
-    right_match = np.where((center[T_half:] - right[:T_half]) == 0)[0]
+    repred_t = center.size // 2
+    left_match = np.where((left[-repred_t:] - center[:repred_t])[::-1] == 0)[0]
+    right_match = np.where((center[repred_t:] - right[:repred_t]) == 0)[0]
     if left_match.size == 0 or right_match.size == 0:
         warnings.warn(
             "Unable to merge reprediction. Annotation is probably incorrect.",
             RuntimeWarning,
         )
-    if left_match.size > 0 and (l := left_match[0]) > 0:
-        left[-l:] = center[T_half-l:T_half]
-    if right_match.size > 0 and (r := right_match[0]) > 0:
-        right[:r] = center[T_half:T_half+r]
+    if left_match.size > 0 and (l := left_match[-1]) > 0:
+        left[-l:] = center[repred_t-l:repred_t]
+    if right_match.size > 0 and (r := right_match[-1]) > 0:
+        right[:r] = center[repred_t:repred_t+r]
     return left, right
 
 
@@ -487,6 +487,12 @@ def _GTF_from_model_liberal(
         | tuple[np.ndarray | None, np.ndarray]
         | tuple[np.ndarray, np.ndarray],
     ],
+    repredict_func: Callable[[FASTA],
+        tuple[np.ndarray, np.ndarray | None]
+        | tuple[np.ndarray | None, np.ndarray]
+        | tuple[np.ndarray, np.ndarray],
+    ] | None = None,
+    reprediction_factor: float = 0.5,
     exon_at_boundary: int | None = None,
     model_name: str = "Model",
     verbose: bool = True,
@@ -509,7 +515,7 @@ def _GTF_from_model_liberal(
     repred_seqs = []
     repred_index = []
     repred_strand = []
-    T_half = fasta.T // 2
+    repred_t = int(fasta.T * reprediction_factor)
     total_mis_fwd = 0
     total_mis_bwd = 0
     total_mis_both = 0
@@ -547,7 +553,7 @@ def _GTF_from_model_liberal(
         if mis.size > 0:
             repred_seqs.append(Sequence(
                 np.concatenate(
-                    (fasta.nuc[mis, T_half:], fasta.nuc[mis+1, :T_half]),
+                    (fasta.nuc[mis, -repred_t:], fasta.nuc[mis+1, :repred_t]),
                     axis=-1,
                 ),
                 name=seq.name,
@@ -564,7 +570,10 @@ def _GTF_from_model_liberal(
             flush=True,
         )
 
-        repred_fwd, repred_bwd = predict_func(FASTA(repred_seqs))
+        if repredict_func is not None:
+            repred_fwd, repred_bwd = repredict_func(FASTA(repred_seqs))
+        else:
+            repred_fwd, repred_bwd = predict_func(FASTA(repred_seqs))
 
         if verbose: print(
             f"[{default_timer()-start_time:.4f}s] Merging repredictions.",
@@ -651,6 +660,12 @@ def GTF_from_model(
         | tuple[np.ndarray | None, np.ndarray]
         | tuple[np.ndarray, np.ndarray],
     ],
+    repredict_func: Callable[[FASTA],
+        tuple[np.ndarray, np.ndarray | None]
+        | tuple[np.ndarray | None, np.ndarray]
+        | tuple[np.ndarray, np.ndarray],
+    ] | None = None,
+    reprediction_factor: float = 0.5,
     model_name: str = "Model",
     verbose: bool = True,
     repredict_exon_at_boundary: int | None = None,
@@ -670,6 +685,15 @@ def GTF_from_model(
             the :class:`bricks2marble.tf.HMM`. The first numpy array is
             a prediction on the forward strand, the second a prediction
             on the reverse strand. One of them can be missing.
+        repredict_func (Callable, optional): A function of the same
+            nature as `predict_func`, but used for the second stage of
+            predictions that solves mismatches of the first. The default
+            is None, where `predict_func` is used for repredictions,
+            too. Only used for `liberal` case.
+        reprediction_factor (float, optional): A float between 0 and 1
+            that determines the length of chunks used in the
+            reprediction. A value of 1 means that the size is twice the
+            size of the first predictions. Only used for `liberal` case.
         model_name (str): Name of the model that is used, or any other
             identifier. This will only be listed as the 'source' in the
             GTF file.
@@ -693,6 +717,8 @@ def GTF_from_model(
         return _GTF_from_model_liberal(
             fasta,
             predict_func=predict_func,
+            repredict_func=repredict_func,
+            reprediction_factor=reprediction_factor,
             model_name=model_name,
             exon_at_boundary=repredict_exon_at_boundary,
             verbose=verbose,
