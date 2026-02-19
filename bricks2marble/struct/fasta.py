@@ -2,7 +2,7 @@ from typing import Callable, Literal, overload
 
 import numpy as np
 from pydantic import BaseModel
-
+import math
 
 class Segment(BaseModel):
     """A segment has a name and a defined range. It is typically used to
@@ -412,6 +412,19 @@ class FASTA:
     def T(self) -> int:
         return self.nuc.shape[1]
 
+    def complement(self, in_place: bool = False) -> "FASTA":
+        """Return a FASTA where every Sequence is complemented.
+
+        Order of sequences is preserved 1:1 with `self._sequences`.
+        If `in_place=True`, replaces the internal sequences and returns `self`.
+        Otherwise returns a new FASTA.
+        """
+        complemented = [seq.complement() for seq in self._sequences]
+        if in_place:
+            self._sequences = complemented
+            return self
+        return FASTA(complemented)
+
     def resample(self, T: int, drop_remainder: bool = False) -> "FASTA":
         """Resamples the :class:`FASTA` object such that each sequence
         is grouped into chunks of the given length. This can lead to
@@ -500,6 +513,102 @@ class FASTA:
 
         for seq in self._sequences:
             seq.name = rename(seq.name)
+
+    def _effective_len(self, seq: Sequence, chunk_size: int) -> int:
+        """Effective length used for grouping: max(actual_length, chunk_size)."""
+        if chunk_size <= 0:
+            raise ValueError(f"Unallowed chunk_size: {chunk_size}")
+        return chunk_size if seq.size < chunk_size else seq.size
+
+    def grouped(
+        self,
+        t: int = 50_000_400,
+        chunk_size: int = 500_004,
+        sort_by_length: bool = True,
+    ) -> list["FASTA"]:
+        """Group sequences into FASTA groups whose total effective length
+        exceeds `t`.
+
+        Args:
+            t: Threshold for starting a new group (new group
+               starts when current_sum > t).
+            chunk_size: Minimum effective length assigned to short sequences.
+            sort_by_length: If True, sort sequences by increasing size before
+               grouping.
+
+        Returns:
+            A list of FASTA objects, each containing a group of Sequence objects.
+        """
+        if t <= 0:
+            raise ValueError(f"Unallowed t: {t}")
+
+        seqs = list(self._sequences)
+        if sort_by_length:
+            seqs.sort(key=lambda s: s.size)  # increasing length
+
+        groups: list[list[Sequence]] = []
+        current_group: list[Sequence] = []
+        current_sum = 0
+
+        for seq in seqs:
+            current_sum += self._effective_len(seq, chunk_size=chunk_size)
+            current_group.append(seq)
+
+            if current_sum > t:
+                if current_group:
+                    groups.append(current_group)
+                current_group = []
+                current_sum = 0
+
+        if current_group:
+            groups.append(current_group)
+
+        return [FASTA(g) for g in groups]
+
+    def compute_adaptive_chunksize(
+        self,
+        base_chunksize: int,
+        resample: bool = False,
+        parallel_factor: int = None,
+    ) -> int:
+        """Compute adaptive chunk size for this FASTA group.
+
+        Logic:
+        - If all sequences are shorter than base_chunksize → shrink to max length.
+        - Round chunksize up to smallest multiple compatible with
+          {2, 9, parallel_factor}.
+
+        Args:
+            base_chunksize:
+                Default chunk size (original global chunksize).
+
+        Returns:
+            int: computed chunk size
+        """
+        if base_chunksize <= 0:
+            raise ValueError(f"Unallowed base_chunksize: {base_chunksize}")
+        if len(self._sequences) == 0:
+            raise ValueError("Cannot compute chunksize for empty FASTA")
+
+        chunksize = base_chunksize
+        max_len = max(seq.size for seq in self._sequences)
+
+        # if all sequences shorter than base chunk → shrink
+        if max_len < base_chunksize:
+            chunksize = max_len
+            # new chunksize must divide 2, 9 and parallel_factor
+            # round up to smallest valid multiple
+            if parallel_factor is None:
+                parallel_factor = 1
+            if parallel_factor <= 0:
+                raise ValueError(f"Unallowed parallel_factor: {parallel_factor}")
+            divisor = 2 * 9 * parallel_factor // math.gcd(18, parallel_factor)
+            chunksize = divisor * (1 + (chunksize - 1) // divisor)
+
+        if resample:
+            self.resample(chunksize)
+
+        return chunksize
 
     def copy(self) -> "FASTA":
         return FASTA([seq.copy() for seq in self._sequences])

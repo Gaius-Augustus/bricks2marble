@@ -3,10 +3,32 @@ import re
 import warnings
 from enum import Enum
 from typing import Callable, Literal
+from .fasta import Region, FASTA
 
-from .fasta import Region
+_CODON_TABLE = {
+        # U -> T
+        "TTT":"F","TTC":"F","TTA":"L","TTG":"L",
+        "TCT":"S","TCC":"S","TCA":"S","TCG":"S",
+        "TAT":"Y","TAC":"Y","TAA":"*","TAG":"*",
+        "TGT":"C","TGC":"C","TGA":"*","TGG":"W",
 
+        "CTT":"L","CTC":"L","CTA":"L","CTG":"L",
+        "CCT":"P","CCC":"P","CCA":"P","CCG":"P",
+        "CAT":"H","CAC":"H","CAA":"Q","CAG":"Q",
+        "CGT":"R","CGC":"R","CGA":"R","CGG":"R",
 
+        "ATT":"I","ATC":"I","ATA":"I","ATG":"M",
+        "ACT":"T","ACC":"T","ACA":"T","ACG":"T",
+        "AAT":"N","AAC":"N","AAA":"K","AAG":"K",
+        "AGT":"S","AGC":"S","AGA":"R","AGG":"R",
+
+        "GTT":"V","GTC":"V","GTA":"V","GTG":"V",
+        "GCT":"A","GCC":"A","GCA":"A","GCG":"A",
+        "GAT":"D","GAC":"D","GAA":"E","GAG":"E",
+        "GGT":"G","GGC":"G","GGA":"G","GGG":"G",
+    }
+
+_RC_TRANS = str.maketrans("ACGTNacgtn", "TGCANtgcan")
 class FeatureType(Enum):
 
     CDS = "CDS"
@@ -110,6 +132,86 @@ class Transcript:
         }
         self.start = -1
         self.end = -1
+        self.cds_seq: str | None = None
+
+
+    def coding_sequence(self, fasta: FASTA | str) -> str:
+        if self.cds_seq is not None:
+            return self.cds_seq
+
+        coords = self.coords(FeatureType.CDS)
+        if not coords:
+            self.cds_seq = ""
+            return ""
+
+        coords = sorted(coords, key=lambda x: x[0])
+
+        if isinstance(fasta, str):
+            if self.strand == "+":
+                cds = "".join(fasta[s:e] for s, e in coords)
+            else:
+                cds = "".join(fasta[s:e].translate(_RC_TRANS) for s, e in coords)[::-1]
+        elif isinstance(fasta, FASTA):
+            try:
+                chrom = fasta[self.seqname]  # Sequence
+            except KeyError as e:
+                raise KeyError(
+                    f"Transcript {self.id!r} references seqname {self.seqname!r}, "
+                    "but it is not present in the provided FASTA."
+                ) from e
+
+            if self.strand == "+":
+                cds = "".join(chrom.positions(s,e).string() for s, e in coords)
+            else:
+                cds = "".join(chrom.positions(s,e).string().translate(_RC_TRANS) for s, e in coords)[::-1]
+
+        self.cds_seq = cds
+        return cds
+
+
+    def protein_sequence(
+        self,
+        fasta: "FASTA",
+        *,
+        drop_terminal_stop: bool = True,
+        require_multiple_of_three: bool = False,
+    ) -> str:
+        """Translate the transcript CDS into amino acids (standard code).
+
+        - Unknown/ambiguous codons -> 'X'
+        - Stop codons -> '*'
+        - If drop_terminal_stop=True, removes a trailing '*' (common convention).
+        - If require_multiple_of_three=True, raises ValueError if len(CDS)%3!=0.
+        """
+        cds = self.coding_sequence(fasta)
+        if not cds:
+            return ""
+
+        cds_u = cds.upper().replace("U", "T")
+
+        if len(cds_u) % 3 != 0:
+            msg = (
+                f"CDS length for transcript {self.id!r} is {len(cds_u)}, "
+                "not a multiple of 3."
+            )
+            if require_multiple_of_three:
+                raise ValueError(msg)
+            warnings.warn(msg + " Truncating trailing nucleotides for translation.")
+            cds_u = cds_u[: (len(cds_u) // 3) * 3]
+
+        aa = []
+        for i in range(0, len(cds_u), 3):
+            codon = cds_u[i:i+3]
+            # If any ambiguity or non-ACGT, emit X
+            if any(b not in "ACGT" for b in codon):
+                aa.append("X")
+            else:
+                aa.append(_CODON_TABLE.get(codon, "X"))
+
+        prot = "".join(aa)
+        if drop_terminal_stop and prot.endswith("*"):
+            prot = prot[:-1]
+        return prot
 
     def add(self, entry: GTFEntry) -> None:
         """Adds a :class:`GTFEntry` object to the transcript."""

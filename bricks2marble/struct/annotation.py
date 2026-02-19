@@ -1,6 +1,7 @@
 import csv
 from collections import OrderedDict
 from collections.abc import Iterator
+import textwrap
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Literal
 
@@ -180,6 +181,7 @@ class Annotation:
         stop_codons: list[str] | bool = True,
         intron_begin: list[str] | bool = True,
         intron_end: list[str] | bool = True,
+        inframe_stop_codons: list[str] | bool = True,
         no_repeats: bool = False,
     ) -> None:
         """Removes any transcripts that do not meet the given
@@ -209,6 +211,10 @@ class Annotation:
                 possible end patterns of introns, or a boolean value. If
                 true, defaults to only "AG" and if false, does no checks
                 for end patterns.
+            inframe_stop_codons (list[str], optional): A list of strings of
+                possible stop codons or a boolean value. If true, defaults
+                to "TAG", "TAA" or "TGA" and if false, does no checks for
+                inframe stop codons.
         """
         if boundaries:
             if fasta is None:
@@ -222,6 +228,7 @@ class Annotation:
                 stop_codons=stop_codons,
                 intron_begin=intron_begin,
                 intron_end=intron_end,
+                inframe_stop_codons=inframe_stop_codons,
                 remove=True,
             )
         if no_repeats:
@@ -328,13 +335,15 @@ class Annotation:
             gtf.extend(gene.to_list())
         return gtf
 
-    def to_gtf(self, path: Path | str) -> None:
+    def to_gtf(self, path: Path | str, mode: Literal["w", "a", "x"] = "w") -> None:
         """Write the annotation in gtf format to the given path.
 
         Args:
             path (str): Path to the output file, ends with ".gtf".
         """
-        with open(path, 'w+') as file:
+        path = Path(path)
+
+        with open(path, mode) as file:
             out_writer = csv.writer(
                 file,
                 delimiter='\t',
@@ -343,6 +352,103 @@ class Annotation:
             )
             for line in self.to_list():
                 out_writer.writerow(line.to_list())
+
+    def codingseq_to_file(
+        self,
+        fasta: "FASTA",
+        path: Path | str,
+        mode: Literal["w", "a", "x"] = "w",
+        line_width: int = 60,
+        header_fn: Callable[[Gene, Transcript], str] | None = None,
+        skip_empty: bool = True
+    ) -> None:
+        """Write all transcript coding sequences to a FASTA file.
+
+        Args:
+            fasta (FASTA): Genome FASTA used to extract coding sequences.
+            path (Path | str): Output FASTA path.
+            mode (Literal["w","a","x"]): File open mode.
+            line_width (int): Wrap sequence to this line width (FASTA style).
+            header_fn (callable, optional): Custom header builder. If None,
+                uses: "{gene_id}|{tx_id}|{seqname}:{start}-{end}({strand})".
+            skip_empty (bool): If True, skip empty coding sequences.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        def default_header(g: Gene, tx: Transcript) -> str:
+            return f"{g.id}|{tx.id}|{g.seqname}:{tx.start}-{tx.end}({g.strand})"
+
+        mk_header = header_fn or default_header
+
+        with open(path, mode) as fh:
+            for gene in self:
+                for tx in gene:
+                    try:
+                        seq = tx.coding_sequence(fasta)
+                    except Exception as e:
+                        raise
+
+                    if skip_empty and (seq is None or len(seq) == 0):
+                        continue
+
+                    header = mk_header(gene, tx)
+                    fh.write(f">{header}\n")
+                    if line_width and line_width > 0:
+                        fh.write("\n".join(textwrap.wrap(seq, width=line_width)))
+                        fh.write("\n")
+                    else:
+                        fh.write(seq + "\n")
+
+    def proteinseq_to_file(
+        self,
+        fasta: "FASTA",
+        path: Path | str,
+        mode: Literal["w", "a", "x"] = "w",
+        line_width: int = 60,
+        header_fn: Callable[[Gene, Transcript], str] | None = None,
+        skip_empty: bool = True,
+    ) -> None:
+        """Write all translated protein sequences to a FASTA file.
+
+        Assumes Transcript has a method `protein_sequence(fasta)` that returns the
+        amino acid string for the transcript's CDS in transcript orientation.
+
+        Args:
+            fasta (FASTA): Genome FASTA used to extract coding sequences.
+            path (Path | str): Output FASTA path.
+            mode (Literal["w","a","x"]): File open mode.
+            line_width (int): Wrap sequence to this line width (FASTA style).
+            header_fn (callable, optional): Custom header builder. If None,
+                uses: "{gene_id}|{tx_id}|{seqname}:{start}-{end}({strand})".
+            skip_empty (bool): If True, skip empty protein sequences.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        def default_header(g: Gene, tx: Transcript) -> str:
+            return f"{g.id}|{tx.id}|{g.seqname}:{tx.start}-{tx.end}({g.strand})"
+
+        mk_header = header_fn or default_header
+
+        with open(path, mode) as fh:
+            for gene in self:
+                for tx in gene:
+                    try:
+                        prot = tx.protein_sequence(fasta)
+                    except Exception as e:
+                        raise
+
+                    if skip_empty and (prot is None or len(prot) == 0):
+                        continue
+
+                    header = mk_header(gene, tx)
+                    fh.write(f">{header}\n")
+                    if line_width and line_width > 0:
+                        fh.write("\n".join(textwrap.wrap(prot, width=line_width)))
+                        fh.write("\n")
+                    else:
+                        fh.write(prot + "\n")
 
     def __iter__(self) -> Iterator[Gene]:
         return iter(list(self._genes.values()))

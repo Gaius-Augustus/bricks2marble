@@ -8,6 +8,7 @@ def check_annotation_boundaries(
     stop_codons: list[str] | bool = True,
     intron_begin: list[str] | bool = True,
     intron_end: list[str] | bool = True,
+    inframe_stop_codons: list[str] | bool = True,
     remove: bool = False,
 ) -> tuple[list[int], list[int], list[int], list[int], list[int]]:
     """Checks the given annotation for having start and stop codons at
@@ -33,6 +34,10 @@ def check_annotation_boundaries(
             possible end patterns of introns, or a boolean value. If
             true, defaults to only "AG" and if false, does no checks for
             end patterns.
+        inframe_stop_codons (list[str], optional): A list of strings of
+            possible stop codons or a boolean value. If true, defaults
+            to "TAG", "TAA" or "TGA" and if false, does no checks for
+            inframe stop codons.
         remove (bool, optional): If set to true, removes all bad
             transcripts from the annotation.
 
@@ -44,12 +49,17 @@ def check_annotation_boundaries(
             - positions with missing intron begin patterns
             - positions with missing intron end patterns
             - out-of-bounds positions
+            - transcripts with internal in-frame stop codons
     """
     if isinstance(start_codons, bool) and start_codons: start_codons = ["ATG"]
     if isinstance(stop_codons, bool) and stop_codons:
         stop_codons = ["TAG", "TAA", "TGA"]
     if isinstance(intron_begin, bool) and intron_begin: intron_begin = ["GT"]
     if isinstance(intron_end, bool) and intron_end: intron_end = ["AG"]
+    if isinstance(inframe_stop_codons, bool) and inframe_stop_codons:
+        inframe_stop_codons = ["TAG", "TAA", "TGA"]
+    if inframe_stop_codons is True and isinstance(stop_codons, list):
+        inframe_stop_codons = stop_codons
 
     reverse = str.maketrans("ACGTNacgt", "TGCANtgca")
 
@@ -57,9 +67,12 @@ def check_annotation_boundaries(
     wrong_stop = []
     wrong_begin = []
     wrong_end = []
+    wrong_inframe_stop = []
     out_of_range = []
+
     seqname = next(iter(next(iter(annotation)))).seqname
     seq = fasta[seqname].string()
+
     for gene in annotation:
         for tx in gene:
             if tx.seqname != seqname:
@@ -91,6 +104,17 @@ def check_annotation_boundaries(
                     wrong_stop.append(
                         (gene.id, tx.id, tx.start, tx.end, tx.strand)
                     )
+            if inframe_stop_codons:
+                stop_set = set(inframe_stop_codons)  # do this once outside the loops
+
+                tx_seq = tx.coding_sequence(seq)
+                s = tx_seq.upper()
+                L = len(s)
+
+                # exclude terminal stop: only scan [0, L-3)
+                internal_end = L - 3
+                if internal_end >= 3 and any(s[i:i+3] in stop_set for i in range(0, internal_end, 3)):
+                    wrong_inframe_stop.append((gene.id, tx.id, tx.start, tx.end, tx.strand))
 
             for entry in tx.entries:
                 if entry.feature == FeatureType.Intron:
@@ -138,8 +162,13 @@ def check_annotation_boundaries(
                 annotation[gid]._transcripts.pop(tid)
             except KeyError:
                 continue
+        for gid, tid, _, _, _ in wrong_inframe_stop:
+            try:
+                annotation[gid]._transcripts.pop(tid)
+            except KeyError:
+                continue
 
-    return wrong_start, wrong_stop, wrong_begin, wrong_end, out_of_range
+    return wrong_start, wrong_stop, wrong_begin, wrong_end, out_of_range, wrong_inframe_stop
 
 
 def check_repeat_masked(

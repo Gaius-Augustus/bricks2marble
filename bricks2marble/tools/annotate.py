@@ -3,7 +3,7 @@ from timeit import default_timer
 from typing import Callable, Literal
 
 import numpy as np
-
+import sys
 from ..struct import FASTA, Annotation, FeatureType, GTFEntry, Region, Sequence
 
 HMM_STATE_AGGREGATION = np.array([
@@ -168,9 +168,10 @@ def _annotation_from_dict(
     entries_fwd: dict[str, list[list[Region]]],
     entries_bwd: dict[str, list[list[Region]]],
     model_name: str = "Model",
+    starting_tx_id: int = 0,
 ) -> Annotation:
     annotation = Annotation()
-    tx_id = 0
+    tx_id = starting_tx_id
     for seq in entries_fwd:
         phase = -1
         len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
@@ -217,6 +218,7 @@ def _GTF_from_model_conservative(
         | tuple[np.ndarray, np.ndarray],
     ],
     model_name: str = "Model",
+    starting_tx_id: int = 0,
     verbose: bool = True,
 ) -> Annotation:
     if verbose: start_time = default_timer()
@@ -297,7 +299,7 @@ def _GTF_from_model_conservative(
                 segment.start,
                 strand="+",
             )
-            start_f, txs_f, end_f = _transcripts_from_regions(regions_fwd)
+            start_f, txs_f, end_f = _transcripts_from_regions(regions_fwd, seperate_first=True)
             if segment.name not in entries_fwd: entries_fwd[segment.name] = []
 
             is_ir_f = 'intergenic' in [r.name for r in regions_fwd]
@@ -328,7 +330,7 @@ def _GTF_from_model_conservative(
                 segment.start,
                 strand="-",
             )
-            start_b, txs_b, end_b = _transcripts_from_regions(regions_bwd)
+            start_b, txs_b, end_b = _transcripts_from_regions(regions_bwd, seperate_first=True)
             if segment.name not in entries_bwd: entries_bwd[segment.name] = []
 
             is_ir_b = 'intergenic' in [r.name for r in regions_bwd]
@@ -369,7 +371,7 @@ def _GTF_from_model_conservative(
                 current_re = repred_fwd[0]  # type: ignore
                 repred_fwd = repred_fwd[1:]  # type: ignore
                 re_ranges = _split_regions(current_re, c_re.start)
-                start_f, re_txs_f, end_f = _transcripts_from_regions(re_ranges)
+                start_f, re_txs_f, end_f = _transcripts_from_regions(re_ranges, seperate_first=True)
 
                 if (
                     not is_ir_f
@@ -398,7 +400,7 @@ def _GTF_from_model_conservative(
                 current_re = repred_bwd[0]  # type: ignore
                 repred_bwd = repred_bwd[1:]  # type: ignore
                 re_ranges = _split_regions(current_re, c_re.start)
-                start_b, re_txs_b, end_b = _transcripts_from_regions(re_ranges)
+                start_b, re_txs_b, end_b = _transcripts_from_regions(re_ranges, seperate_first=True)
 
                 if (
                     not is_ir_b
@@ -426,6 +428,7 @@ def _GTF_from_model_conservative(
         entries_fwd,
         entries_bwd,
         model_name=model_name,
+        starting_tx_id=starting_tx_id,
     )
 
     if verbose: print(
@@ -448,6 +451,7 @@ def _find_mismatches(
         pred[:-1, -1] != pred[1:, 0],
         ~np.isin(pred[:-1, -1], [0, 1, 2, 3]),
     )
+    print("_find_mismatches",exon_at_boundary, mask,file=sys.stderr)
     if exon_at_boundary is not None:
         mask = np.logical_or(
             mask,
@@ -473,9 +477,9 @@ def _merge_replace_center(
             "Unable to merge reprediction. Annotation is probably incorrect.",
             RuntimeWarning,
         )
-    if left_match.size > 0 and (l := left_match[0]) > 0:
+    if left_match.size > 0 and (l := left_match[-1]) > 0:
         left[-l:] = center[T_half-l:T_half]
-    if right_match.size > 0 and (r := right_match[0]) > 0:
+    if right_match.size > 0 and (r := right_match[-1]) > 0:
         right[:r] = center[T_half:T_half+r]
     return left, right
 
@@ -489,6 +493,8 @@ def _GTF_from_model_liberal(
     ],
     exon_at_boundary: int | None = None,
     model_name: str = "Model",
+    starting_tx_id: int = 0,
+    with_lstm: bool = False,
     verbose: bool = True,
 ) -> Annotation:
     if verbose: start_time = default_timer()
@@ -499,7 +505,10 @@ def _GTF_from_model_liberal(
         flush=True,
     )
 
-    labels_fwd, labels_bwd = predict_func(fasta)
+    if with_lstm:
+        labels_fwd, labels_bwd, lstm_fwd, lstm_bwd = predict_func(fasta)
+    else:
+        labels_fwd, labels_bwd = predict_func(fasta)
 
     if verbose: print(
         f"[{default_timer()-start_time:.4f}s] Searching for errors.",
@@ -507,6 +516,8 @@ def _GTF_from_model_liberal(
     )
 
     repred_seqs = []
+    lstm_repred_fwd = []
+    lstm_repred_bwd = []
     repred_index = []
     repred_strand = []
     T_half = fasta.T // 2
@@ -552,6 +563,15 @@ def _GTF_from_model_liberal(
                 ),
                 name=seq.name,
             ))
+            if with_lstm:
+                lstm_repred_fwd = np.concatenate(
+                    (lstm_fwd[mis, T_half:], lstm_fwd[mis+1, :T_half]),
+                    axis=1
+                )
+                lstm_repred_bwd = np.concatenate(
+                    (lstm_bwd[mis, T_half:], lstm_bwd[mis+1, :T_half]),
+                    axis=1
+                )
         shift += seq.N
 
     total = total_mis_fwd + total_mis_bwd + total_mis_both
@@ -563,7 +583,13 @@ def _GTF_from_model_liberal(
             f"Repredicting {total} sequences.",
             flush=True,
         )
-        repred_fwd, repred_bwd = predict_func(FASTA(repred_seqs))
+        if with_lstm:
+            repred_fwd, repred_bwd, _, _ = predict_func(
+                    FASTA(repred_seqs),
+                    lstm_repred_fwd=lstm_repred_fwd,
+                    lstm_repred_bwd=lstm_repred_bwd)
+        else:
+            repred_fwd, repred_bwd = predict_func(FASTA(repred_seqs))
 
     if verbose: print(
         f"[{default_timer()-start_time:.4f}s] Merging repredictions.",
@@ -605,7 +631,7 @@ def _GTF_from_model_liberal(
             )
             _, txs, last = _transcripts_from_regions(
                 regions,
-                seperate_first=False,
+                seperate_first=True,
             )
             if seq.name not in entries_fwd:
                 entries_fwd[seq.name] = []
@@ -618,7 +644,7 @@ def _GTF_from_model_liberal(
             )
             _, txs, last = _transcripts_from_regions(
                 regions,
-                seperate_first=False,
+                seperate_first=True,
             )
             if seq.name not in entries_bwd:
                 entries_bwd[seq.name] = []
@@ -635,6 +661,7 @@ def _GTF_from_model_liberal(
         entries_fwd,
         entries_bwd,
         model_name=model_name,
+        starting_tx_id=starting_tx_id,
     )
 
     if verbose: print(
@@ -660,6 +687,7 @@ def GTF_from_model(
     verbose: bool = True,
     repredict_exon_at_boundary: int | None = None,
     liberal: bool = False,
+    starting_tx_id: int = 0,
 ) -> Annotation:
     """Generate a genome annotation using a nucleotide sequence and a
     function that outputs feature labels of regions of interest.
@@ -701,10 +729,12 @@ def GTF_from_model(
             model_name=model_name,
             exon_at_boundary=repredict_exon_at_boundary,
             verbose=verbose,
+            starting_tx_id=starting_tx_id,
         )
     return _GTF_from_model_conservative(
         fasta,
         predict_func=predict_func,
         model_name=model_name,
         verbose=verbose,
+        starting_tx_id=starting_tx_id,
     )
