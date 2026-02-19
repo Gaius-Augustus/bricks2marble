@@ -206,6 +206,11 @@ class AnnotationHMM(tf.keras.Layer):
             hmm = TFHMM(
                 states=self.config.n_states,
                 heads=heads,
+                emission_stability=(
+                    1e-8,
+                    list(range(4+3*self.config.intron_state_chain)),
+                    1e-8,
+                ),
             )
 
             hmm.transitioner.allow = transitions
@@ -490,7 +495,7 @@ class AnnotationHMM(tf.keras.Layer):
             emissions = emissions + (repeats, )
         return self.hmm(
             *emissions,
-            transition_delta=scores,
+            # transition_delta=scores,
             mode=mode,
             parallel=parallel,
         )  # type: ignore
