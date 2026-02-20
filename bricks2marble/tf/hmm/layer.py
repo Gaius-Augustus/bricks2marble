@@ -206,11 +206,6 @@ class AnnotationHMM(tf.keras.Layer):
             hmm = TFHMM(
                 states=self.config.n_states,
                 heads=heads,
-                emission_stability=(
-                    1e-8,
-                    list(range(4+3*self.config.intron_state_chain)),
-                    1e-8,
-                ),
             )
 
             hmm.transitioner.allow = transitions
@@ -239,6 +234,7 @@ class AnnotationHMM(tf.keras.Layer):
             nuc_emitter_right.initializer = emissions_right.flatten()
             nuc_emitter_right.trainable = False
 
+            stream_emitter.clip_min = 1e-7
             hmm.add_emitter(stream_emitter)
             hmm.add_emitter(nuc_emitter_left)
             hmm.add_emitter(nuc_emitter_right)
@@ -246,6 +242,7 @@ class AnnotationHMM(tf.keras.Layer):
             if self.config.emitter_prior is not None:
                 prior_emitter = TFCategoricalEmitter()
                 prior_emitter.trainable = False
+                prior_emitter.clip_min = 1e-7
                 hmm.add_emitter(prior_emitter)
 
             if self.config.repeats_emitter is not None:
