@@ -231,6 +231,7 @@ class AnnotationHMM(tf.keras.Layer):
             nuc_emitter_right.initializer = emissions_right.flatten()
             nuc_emitter_right.trainable = False
 
+            stream_emitter.clip_min = 1e-7
             hmm.add_emitter(stream_emitter)
             hmm.add_emitter(nuc_emitter_left)
             hmm.add_emitter(nuc_emitter_right)

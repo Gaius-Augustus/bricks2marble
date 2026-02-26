@@ -451,7 +451,6 @@ def _find_mismatches(
         pred[:-1, -1] != pred[1:, 0],
         ~np.isin(pred[:-1, -1], [0, 1, 2, 3]),
     )
-    print("_find_mismatches",exon_at_boundary, mask,file=sys.stderr)
     if exon_at_boundary is not None:
         mask = np.logical_or(
             mask,
@@ -477,9 +476,9 @@ def _merge_replace_center(
             "Unable to merge reprediction. Annotation is probably incorrect.",
             RuntimeWarning,
         )
-    if left_match.size > 0 and (l := left_match[-1]) > 0:
+    if left_match.size > 0 and (l := left_match[0]) > 0:
         left[-l:] = center[T_half-l:T_half]
-    if right_match.size > 0 and (r := right_match[-1]) > 0:
+    if right_match.size > 0 and (r := right_match[0]) > 0:
         right[:r] = center[T_half:T_half+r]
     return left, right
 
@@ -546,6 +545,7 @@ def _GTF_from_model_liberal(
         mis_bwd = mis_bwd[~np.isin(mis_bwd, mis_fwd)]
         mis_fwd = mis_fwd[~dupli]
         mis = np.r_[mis_fwd, mis_bwd, mis_both]
+        mis = mis.astype(int)
         total_mis_fwd += len(mis_fwd)
         total_mis_bwd += len(mis_bwd)
         total_mis_both += len(mis_both)
