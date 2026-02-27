@@ -130,7 +130,8 @@ class AnnotationHMMConfig(ModelConfig):
     initial_exon_len: int | float | None = None
     initial_intron_len: int | float | list[float | int] | None = None
     initial_ir_len: int | float | None = None
-    train_transitioner: bool = True
+    train_transitions: bool = True
+    train_start_dist: bool = True
     transitioner_share_noncoding: bool = False
     transitioner_share_frames: bool = True
     transition_scorer: TransitionScorerConfig | None = None
@@ -216,7 +217,8 @@ class AnnotationHMM(tf.keras.Layer):
             hmm.transitioner.share_start = share_starts
             hmm.transitioner.initializer_start = values_starts
 
-            hmm.transitioner.trainable = self.config.train_transitioner
+            hmm.transitioner.train_transitions = self.config.train_transitions
+            hmm.transitioner.train_start_dist = self.config.train_start_dist
 
             if (
                 self.config.emitter_sigmoid_activation
