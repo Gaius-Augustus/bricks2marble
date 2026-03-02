@@ -10,7 +10,6 @@ def load_fasta(
     path: Path | str,
     T: int | None = None,
     drop_remainder: bool = False,
-    restrict: int = -1,
     n_seqs: int | None = None,
     target_seq: str | None = None,
 ) -> FASTA:
@@ -27,40 +26,44 @@ def load_fasta(
         drop_remainder (bool, optional): If set to True, deletes the
             last chunk in each sequence, if the sequence has a length
             not divisable by ``T``. Defaults to False.
-        restrict (int, optional): Restrict the reading window. Only
-            reads the given number of nucleotides from the file.
-            Defaults to -1, which means everything is read.
         n_seqs (int, optional): Stops reading the fasta file after this
             many sequences. Defaults to reading all sequences.
         target_seq (str, optional): Scans the FASTA file from the start
             up to the given sequence name and then only returns this
             sequence. Defaults to all sequences.
     """
-    if Path(path).suffix == ".gz":
-        with gzip.open(path, "rt", encoding="utf-8") as f:
-            lines = f.readlines(restrict)
-    else:
-        with open(path, "r", encoding="utf-8") as f:
-            lines = f.readlines(restrict)
+    if target_seq is not None and n_seqs is not None:
+        raise ValueError(
+            "Specifying both 'n_seqs' and 'target_seq' is not allowed."
+        )
 
     raw_sequences: list[bytes] = []
     name_sequences: list[str] = []
-    current_sequence = ""
-    for line in lines:
-        if line.startswith(">"):
-            if current_sequence:
-                if target_seq is not None and name_sequences[-1] == target_seq:
-                    name_sequences = [name_sequences[-1]]
-                    raw_sequences = [current_sequence.encode()]
-                    break
-                raw_sequences.append(current_sequence.encode())
-                current_sequence = ""
-                if n_seqs is not None and len(name_sequences) == n_seqs:
-                    break
-            name_sequences.append(line[1:].strip())
+    current_name = None
+    current_buffer = None
+    collecting = target_seq is None
+    open_func = gzip.open if Path(path).suffix == ".gz" else open
+    with open_func(path, "rt", encoding="utf-8") as f:
+        for line in f:
+            if line.startswith(">"):
+                if current_name is not None and collecting:
+                    raw_sequences.append(bytes(current_buffer))
+                    name_sequences.append(current_name)
+
+                    if target_seq is not None:
+                        break
+                    if n_seqs is not None and len(name_sequences) >= n_seqs:
+                        break
+
+                current_name = line[1:].strip()
+                collecting = target_seq is None or current_name == target_seq
+                current_buffer = bytearray() if collecting else None
+            else:
+                if collecting: current_buffer.extend(line.strip().encode())
         else:
-            current_sequence += line.strip()
-    raw_sequences.append(current_sequence.encode())
+            if current_name is not None and collecting:
+                raw_sequences.append(bytes(current_buffer))
+                name_sequences.append(current_name)
 
     table = bytearray([4]*256)
     mappings = {a: b for a, b in zip(
