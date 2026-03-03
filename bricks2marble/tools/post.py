@@ -70,8 +70,9 @@ def check_annotation_boundaries(
     wrong_inframe_stop = []
     out_of_range = []
 
-    seqname = next(iter(next(iter(annotation)))).seqname
-    seq = fasta[seqname].string()
+    if len(annotation._genes) > 0:
+        seqname = next(iter(next(iter(annotation)))).seqname
+        seq = fasta[seqname].string()
 
     for gene in annotation:
         for tx in gene:

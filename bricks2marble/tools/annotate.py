@@ -3,7 +3,6 @@ from timeit import default_timer
 from typing import Callable, Literal
 
 import numpy as np
-import sys
 from ..struct import FASTA, Annotation, FeatureType, GTFEntry, Region, Sequence
 
 HMM_STATE_AGGREGATION = np.array([
@@ -172,7 +171,7 @@ def _annotation_from_dict(
 ) -> Annotation:
     annotation = Annotation()
     tx_id = starting_tx_id
-    for seq in entries_fwd:
+    for seq in sorted(set(entries_fwd) | set(entries_bwd)):
         phase = -1
         len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
         len_bwd = 0 if seq not in entries_bwd else len(entries_bwd[seq])
@@ -493,7 +492,6 @@ def _GTF_from_model_liberal(
     exon_at_boundary: int | None = None,
     model_name: str = "Model",
     starting_tx_id: int = 0,
-    with_lstm: bool = False,
     verbose: bool = True,
 ) -> Annotation:
     if verbose: start_time = default_timer()
@@ -504,10 +502,7 @@ def _GTF_from_model_liberal(
         flush=True,
     )
 
-    if with_lstm:
-        labels_fwd, labels_bwd, lstm_fwd, lstm_bwd = predict_func(fasta)
-    else:
-        labels_fwd, labels_bwd = predict_func(fasta)
+    labels_fwd, labels_bwd = predict_func(fasta)
 
     if verbose: print(
         f"[{default_timer()-start_time:.4f}s] Searching for errors.",
@@ -563,15 +558,6 @@ def _GTF_from_model_liberal(
                 ),
                 name=seq.name,
             ))
-            if with_lstm:
-                lstm_repred_fwd = np.concatenate(
-                    (lstm_fwd[mis, T_half:], lstm_fwd[mis+1, :T_half]),
-                    axis=1
-                )
-                lstm_repred_bwd = np.concatenate(
-                    (lstm_bwd[mis, T_half:], lstm_bwd[mis+1, :T_half]),
-                    axis=1
-                )
         shift += seq.N
 
     total = total_mis_fwd + total_mis_bwd + total_mis_both
@@ -583,11 +569,6 @@ def _GTF_from_model_liberal(
             f"Repredicting {total} sequences.",
             flush=True,
         )
-        if with_lstm:
-            repred_fwd, repred_bwd, _, _ = predict_func(
-                    FASTA(repred_seqs),
-                    lstm_repred_fwd=lstm_repred_fwd,
-                    lstm_repred_bwd=lstm_repred_bwd)
         else:
             repred_fwd, repred_bwd = predict_func(FASTA(repred_seqs))
 
@@ -656,7 +637,6 @@ def _GTF_from_model_liberal(
         f"[{default_timer()-start_time:.4f}s] Creating GTF entries.",
         flush=True,
     )
-
     annotation = _annotation_from_dict(
         entries_fwd,
         entries_bwd,
