@@ -1,9 +1,12 @@
 import gzip
+from collections.abc import Generator
 from pathlib import Path
 
 import numpy as np
 
 from ..struct.fasta import FASTA, Sequence
+from .util import index, largest_close_to_divisible_by
+from ..log import log_it
 
 
 def load_fasta(
@@ -137,3 +140,93 @@ def fasta_from_string(string: str) -> FASTA:
         name="seq1",
     )]
     return FASTA(sequences)
+
+
+def iterate_sequences(
+    fasta: Path,
+    min_group_size: int = 50_000_000,
+    T_max: int | None = None,
+    T_factors: list[int] | None = None,
+    sort_reverse: bool | None = False,
+    log: bool = False,
+) -> Generator[FASTA, None, None]:
+    """Yields FASTA objects from the given fasta file in a sorted
+    manner. This can be helpful when processing sequences with a
+    limited ammount of RAM.
+
+    Each returned FASTA is a group of whole sequences from the given
+    file. This leads to large sequences being returned on their own and
+    small sequences being grouped together.
+
+    Args:
+        min_group_size (int, optional): Minimal number of nucleotides in
+            each group except for the last, which can be smaller.
+            Defaults to `50_000_000`.
+        T_max (int, optional): If given, also resamples all sequences to
+            the given chunksize. If all sequences in a group are smaller
+            than `T_max`, the chunk size for that group is determined by
+            the largest sequence in the group. Defaults to no
+            resampling.
+        T_factors (list[int], optional): Imposes extra conditions on
+            newly chosen values for the chunk length in case that all
+            sequences in a group are smaller than `T_max`. A candidate
+            needs to also be divisible by the given numbers. Defaults to
+            no such conditions.
+        sort_reverse (bool, optional): Whether to sort the sequences by
+            size before grouping them. If true, sorts in descending
+            order and if false, sorts in ascending order. Set to None
+            for no sorting. Defaults to False.
+    """
+    idx = index(fasta, sort_reverse=sort_reverse)
+
+    table = bytearray([4]*256)
+    mappings = {a: b for a, b in zip(
+        b"ACGTNnacgt",
+        [0, 1, 2, 3, 4, 4, 5, 6, 7, 8],
+    )}
+    for k, v in mappings.items():
+        table[k] = v
+    translation_table = bytes(table)
+
+    groups = [0]
+    i = 0
+    while i < len(idx):
+        gs = 0
+        while gs < min_group_size and i < len(idx):
+            gs += idx[i][3] if T_max is None or T_max < idx[i][3] else T_max
+            i += 1
+        groups.append(i)
+    if log and len(groups) > 1: log_it(
+        f"Split fasta into {len(groups)} groups of sequences.",
+        extra={"timer": False},
+    )
+
+    for g in range(1, len(groups)):
+        raw_sequences = []
+        name_sequences = []
+        max_len = 0
+        with open(fasta, "rb") as f:
+            for k in range(groups[g-1], groups[g]):
+                f.seek(idx[k][1])
+                seq = f.read(idx[k][2] - idx[k][1])
+                raw_sequences.append(seq.replace(b"\n", b""))
+                name_sequences.append(idx[k][0])
+                if idx[k][3] > max_len: max_len = idx[k][3]
+
+        group = FASTA([Sequence(
+            np.frombuffer(
+                seq.translate(translation_table),
+                dtype=np.int8,
+            )[np.newaxis, :],
+            name=name,
+        ) for seq, name in zip(raw_sequences, name_sequences)])
+
+        if T_max is not None:
+            T = T_max
+            if max_len < T_max:
+                T = max_len if T_factors is None else (
+                    largest_close_to_divisible_by(max_len, T_factors)
+                )
+            group.resample(T)
+
+        yield group
