@@ -385,7 +385,7 @@ def emission_parameters_eye(
     values[np.diag_indices(S)] -= epsilon * (1 + 1 / (S-1))
     values = values.flatten()
     values = safe_log(values)
-
+    if D != S: values = np.tile(values, D // S)
     return tf.keras.initializers.Constant(values), allow, None
 
 

@@ -466,20 +466,27 @@ def _merge_replace_center(
     left: np.ndarray,
     right: np.ndarray,
     center: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    T_half = left.shape[0] // 2
-    left_match = np.where((left[T_half:] - center[:T_half])[::-1] == 0)[0]
-    right_match = np.where((center[T_half:] - right[:T_half]) == 0)[0]
+) -> tuple[np.ndarray, np.ndarray, bool]:
+    repred_t = center.size // 2
+    left_match = np.where((left[-repred_t:] - center[:repred_t])[::-1] == 0)[0]
+    right_match = np.where((center[repred_t:] - right[:repred_t]) == 0)[0]
     if left_match.size == 0 or right_match.size == 0:
-        warnings.warn(
-            "Unable to merge reprediction. Annotation is probably incorrect.",
-            RuntimeWarning,
-        )
-    if left_match.size > 0 and (l := left_match[0]) > 0:
-        left[-l:] = center[T_half-l:T_half]
-    if right_match.size > 0 and (r := right_match[0]) > 0:
-        right[:r] = center[T_half:T_half+r]
-    return left, right
+        return left, right, False
+    if left_match.size > 0 and (l := left_match[-1]) > 0:
+        left[-l:] = center[repred_t-l:repred_t]
+    if right_match.size > 0 and (r := right_match[-1]) > 0:
+        right[:r] = center[repred_t:repred_t+r]
+    return left, right, True
+
+
+def _first_non_zero(x: np.ndarray) -> int:
+    """Source:
+    https://stackoverflow.com/questions/7632963/
+        numpy-find-first-index-of-value-fast
+    """
+    idx = x.view(bool).argmax() // x.itemsize
+    idx = idx if x[idx] else -1
+    return idx
 
 
 def _GTF_from_model_liberal(
@@ -489,6 +496,12 @@ def _GTF_from_model_liberal(
         | tuple[np.ndarray | None, np.ndarray]
         | tuple[np.ndarray, np.ndarray],
     ],
+    repredict_func: Callable[[FASTA],
+        tuple[np.ndarray, np.ndarray | None]
+        | tuple[np.ndarray | None, np.ndarray]
+        | tuple[np.ndarray, np.ndarray],
+    ] | None = None,
+    reprediction_factor: float = 0.5,
     exon_at_boundary: int | None = None,
     model_name: str = "Model",
     starting_tx_id: int = 0,
@@ -512,13 +525,14 @@ def _GTF_from_model_liberal(
     repred_seqs = []
     repred_index = []
     repred_strand = []
-    T_half = fasta.T // 2
+    repred_sequence = []
+    repred_t = int(fasta.T * reprediction_factor)
     total_mis_fwd = 0
     total_mis_bwd = 0
     total_mis_both = 0
 
     shift = 0
-    for seq in fasta:
+    for seq_i, seq in enumerate(fasta):
         if labels_fwd is not None:
             mis_fwd = _find_mismatches(
                 labels_fwd[shift:shift+seq.N, :],
@@ -543,6 +557,7 @@ def _GTF_from_model_liberal(
         total_mis_bwd += len(mis_bwd)
         total_mis_both += len(mis_both)
         repred_index.extend(mis)
+        repred_sequence.extend([seq_i]*len(mis))
         repred_strand.extend(np.r_[
             np.zeros(len(mis_fwd), dtype=np.int32),
             np.ones(len(mis_bwd), dtype=np.int32),
@@ -551,7 +566,7 @@ def _GTF_from_model_liberal(
         if mis.size > 0:
             repred_seqs.append(Sequence(
                 np.concatenate(
-                    (fasta.nuc[mis, T_half:], fasta.nuc[mis+1, :T_half]),
+                    (fasta.nuc[mis, -repred_t:], fasta.nuc[mis+1, :repred_t]),
                     axis=-1,
                 ),
                 name=seq.name,
@@ -567,31 +582,78 @@ def _GTF_from_model_liberal(
             f"Repredicting {total} sequences.",
             flush=True,
         )
-        repred_fwd, repred_bwd = predict_func(FASTA(repred_seqs))
 
-    if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Merging repredictions.",
-        flush=True,
-    )
+        if repredict_func is not None:
+            repred_fwd, repred_bwd = repredict_func(FASTA(repred_seqs))
+        else:
+            repred_fwd, repred_bwd = predict_func(FASTA(repred_seqs))
 
+        if verbose: print(
+            f"[{default_timer()-start_time:.4f}s] Merging repredictions.",
+            flush=True,
+        )
+
+    failed_fwd = {}
+    failed_bwd = {}
     for k, i in enumerate(repred_index):
         strand = repred_strand[k]
         if strand == 0 or strand == 2:
-            labels_fwd[i], labels_fwd[i+1] = (  # type: ignore
+            labels_fwd[i], labels_fwd[i+1], success = (  # type: ignore
                 _merge_replace_center(
                     labels_fwd[i],  # type: ignore
                     labels_fwd[i+1],  # type: ignore
                     repred_fwd[k],  # type: ignore
                 )
             )
+            if not success:
+                if repred_sequence[k] not in failed_fwd:
+                    failed_fwd[repred_sequence[k]] = []
+                failed_fwd[repred_sequence[k]].append((i+1) * fasta.T)
         if strand == 1 or strand == 2:
-            labels_bwd[i], labels_bwd[i+1] = (  # type: ignore
+            labels_bwd[i], labels_bwd[i+1], success = (  # type: ignore
                 _merge_replace_center(
                     labels_bwd[i],  # type: ignore
                     labels_bwd[i+1],  # type: ignore
                     repred_bwd[k],  # type: ignore
                 )
             )
+            if not success:
+                if repred_sequence[k] not in failed_bwd:
+                    failed_bwd[repred_sequence[k]] = []
+                failed_bwd[repred_sequence[k]].append((i+1) * fasta.T)
+
+    if len(failed_fwd) + len(failed_bwd) > 0:
+        if verbose: print(
+            f"[{default_timer()-start_time:.4f}s] Merging failed for: "
+            f"{len(failed_fwd)} (+) | {len(failed_bwd)} (-). "
+            f"Setting the areas to intergenic regions.",
+            flush=True,
+        )
+        shift = 0
+        for seq_i, seq in enumerate(fasta):
+            if seq_i in failed_fwd:
+                lbl_seq = labels_fwd[shift:shift+seq.N, :].flatten()
+                for pos in failed_fwd[seq_i]:
+                    l = pos - repred_t
+                    r = pos + repred_t
+                    first_ir_l = _first_non_zero(lbl_seq[:l][::-1] == 0)
+                    first_ir_r = _first_non_zero(lbl_seq[r:] == 0)
+                    l = 0 if first_ir_l == -1 else l - first_ir_l
+                    r = None if first_ir_r == -1 else r + first_ir_r
+                    lbl_seq[l:r] = 0
+                labels_fwd[shift:shift+seq.N, :] = lbl_seq.reshape(-1, fasta.T)
+            if seq_i in failed_bwd:
+                lbl_seq = labels_bwd[shift:shift+seq.N, :].flatten()
+                for pos in failed_bwd[seq_i]:
+                    l = pos - repred_t
+                    r = pos + repred_t
+                    first_ir_l = _first_non_zero(lbl_seq[:l][::-1] == 0)
+                    first_ir_r = _first_non_zero(lbl_seq[r:] == 0)
+                    l = 0 if first_ir_l == -1 else l - first_ir_l
+                    r = None if first_ir_r == -1 else r + first_ir_r
+                    lbl_seq[l:r] = 0
+                labels_bwd[shift:shift+seq.N, :] = lbl_seq.reshape(-1, fasta.T)
+            shift += seq.N
 
     if verbose: print(
         f"[{default_timer()-start_time:.4f}s] Forming regions.",
@@ -607,10 +669,7 @@ def _GTF_from_model_liberal(
                 labels_fwd[shift:shift+seq.N, :].flatten(),
                 strand="+",
             )
-            _, txs, last = _transcripts_from_regions(
-                regions,
-                seperate_first=True,
-            )
+            _, txs, _ = _transcripts_from_regions(regions, seperate_first=True)
             if seq.name not in entries_fwd:
                 entries_fwd[seq.name] = []
             entries_fwd[seq.name] += txs
@@ -620,10 +679,7 @@ def _GTF_from_model_liberal(
                 labels_bwd[shift:shift+seq.N, :].flatten(),
                 strand="-",
             )
-            _, txs, last = _transcripts_from_regions(
-                regions,
-                seperate_first=True,
-            )
+            _, txs, _ = _transcripts_from_regions(regions, seperate_first=True)
             if seq.name not in entries_bwd:
                 entries_bwd[seq.name] = []
             entries_bwd[seq.name] += txs
@@ -660,6 +716,12 @@ def GTF_from_model(
         | tuple[np.ndarray | None, np.ndarray]
         | tuple[np.ndarray, np.ndarray],
     ],
+    repredict_func: Callable[[FASTA],
+        tuple[np.ndarray, np.ndarray | None]
+        | tuple[np.ndarray | None, np.ndarray]
+        | tuple[np.ndarray, np.ndarray],
+    ] | None = None,
+    reprediction_factor: float = 0.5,
     model_name: str = "Model",
     verbose: bool = True,
     repredict_exon_at_boundary: int | None = None,
@@ -680,6 +742,15 @@ def GTF_from_model(
             the :class:`bricks2marble.tf.HMM`. The first numpy array is
             a prediction on the forward strand, the second a prediction
             on the reverse strand. One of them can be missing.
+        repredict_func (Callable, optional): A function of the same
+            nature as `predict_func`, but used for the second stage of
+            predictions that solves mismatches of the first. The default
+            is None, where `predict_func` is used for repredictions,
+            too. Only used for `liberal` case.
+        reprediction_factor (float, optional): A float between 0 and 1
+            that determines the length of chunks used in the
+            reprediction. A value of 1 means that the size is twice the
+            size of the first predictions. Only used for `liberal` case.
         model_name (str): Name of the model that is used, or any other
             identifier. This will only be listed as the 'source' in the
             GTF file.
@@ -703,6 +774,8 @@ def GTF_from_model(
         return _GTF_from_model_liberal(
             fasta,
             predict_func=predict_func,
+            repredict_func=repredict_func,
+            reprediction_factor=reprediction_factor,
             model_name=model_name,
             exon_at_boundary=repredict_exon_at_boundary,
             verbose=verbose,
