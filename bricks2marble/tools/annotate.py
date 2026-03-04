@@ -510,8 +510,6 @@ def _GTF_from_model_liberal(
     )
 
     repred_seqs = []
-    lstm_repred_fwd = []
-    lstm_repred_bwd = []
     repred_index = []
     repred_strand = []
     T_half = fasta.T // 2
@@ -569,8 +567,7 @@ def _GTF_from_model_liberal(
             f"Repredicting {total} sequences.",
             flush=True,
         )
-        else:
-            repred_fwd, repred_bwd = predict_func(FASTA(repred_seqs))
+        repred_fwd, repred_bwd = predict_func(FASTA(repred_seqs))
 
     if verbose: print(
         f"[{default_timer()-start_time:.4f}s] Merging repredictions.",

@@ -213,7 +213,7 @@ class Sequence:
     def one_hot(
         self,
         pad_index: int = 4,
-        repeats: Literal["track", "expand", "omit"] = "track",
+        repeats: Literal["track", "expand" , "omit"] = "track",
         N: Literal["track", "uniform"] = "track",
         dtype: type = np.float32,
     ) -> np.ndarray:
