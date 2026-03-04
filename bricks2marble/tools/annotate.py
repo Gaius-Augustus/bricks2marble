@@ -171,6 +171,7 @@ def _first_non_zero(x: np.ndarray) -> int:
     https://stackoverflow.com/questions/7632963/
         numpy-find-first-index-of-value-fast
     """
+    if x.size == 0: return -1
     idx = x.view(bool).argmax() // x.itemsize
     idx = idx if x[idx] else -1
     return idx
@@ -194,7 +195,7 @@ def _annotate(
     first_tx_id: int = 0,
 ) -> tuple[Annotation, int]:
 
-    log_it(f"Start initial prediction of {fasta.N} sequences.")
+    log_it(f"Start initial prediction of {fasta.N} chunks.")
     labels_fwd, labels_bwd = predict_func(fasta)
     log_it("Searching for errors.")
 
@@ -255,7 +256,7 @@ def _annotate(
             "Mismatches: "
             f"{total_mis_fwd} (+) | {total_mis_bwd} (-) | "
             f"{total_mis_both} (+/-). "
-            f"Repredicting {total} sequences."
+            f"Repredicting {total} chunks."
         )
 
         if repredict_func is not None:
@@ -384,7 +385,7 @@ def annotate_genome(
     ] | None = None,
     reprediction_factor: float = 0.5,
     repredict_exon_at_boundary: int | None = None,
-    postprocess: Callable[[Annotation], Annotation] | None = None,
+    postprocess: Callable[[FASTA, Annotation], Annotation] | None = None,
 ) -> None:
     """Generate a genome annotation of a given fasta file.
 
@@ -458,6 +459,26 @@ def annotate_genome(
 
     setup_logging(log_file)
 
+    log_it(
+        f"{'':-^99}\n|{f'{model_name} genome annotation': ^97}|\n{'':-^99}\n"
+            f"> target genome file: {fasta}\n"
+            f"> output annotation file: {output}\n"
+            f"> minimal group size: {min_group_size}\n"
+            f"> maximal chunk length: {T_max}\n"
+            f"> forced divisors of the chunk length: {T_factors}\n"
+            f"> sequence length sorting: "
+            f"{'None' if sort_reverse is None else (
+                'descending' if sort_reverse else 'ascending'
+            )}\n"
+            f"> reprediction factor: {reprediction_factor}\n"
+            f"> repredict exons near boundaries: {(
+                'None' if repredict_exon_at_boundary is None else
+                repredict_exon_at_boundary
+            )}\n"
+            f"> postprocessing: {postprocess is not None}\n",
+        extra={"timer": False},
+    )
+
     fasta_was_gz = False
     if fasta.suffix == ".gz":
         if not allow_extract_gz: raise RuntimeError(
@@ -466,8 +487,8 @@ def annotate_genome(
         fasta_was_gz = True
         tmp = tempfile.NamedTemporaryFile(delete=False)
         log_it(
-            "Given file is an archive and has to be extracted. "
-            f"Using temporary file location:\n\t{tmp.name}",
+            "Given file is an archive and has to be extracted.\n"
+            f"> using temporary file location:\n\t{tmp.name}",
             extra={"timer": False},
         )
         with gzip.open(fasta, "rb") as f_fasta_gz:
@@ -480,8 +501,6 @@ def annotate_genome(
             extra={"timer": False},
         )
 
-    log_it(f"Starting genome annotation for:\n\t{fasta}.\n")
-
     try:
         first_tx_id = 0
         for i, group in enumerate(iterate_sequences(
@@ -492,7 +511,12 @@ def annotate_genome(
             sort_reverse=sort_reverse,
             log=True,
         )):
-            log_it(f"\n{f'Group {i+1}':=^99}\n", extra={"timer": False})
+            log_it(
+                f"\n{f'Group {i+1}':=^99}\n"
+                    f"> sequences: {len(group)}\n"
+                    f"> chunk length: {group.T}\n",
+                extra={"timer": False},
+            )
             group_annotation, last_tx_id = _annotate(
                 group,
                 predict_func=predict_func,
@@ -504,7 +528,7 @@ def annotate_genome(
             )
             if postprocess is not None:
                 log_it("Calling postprocessing function.")
-                group_annotation = postprocess(group_annotation)
+                group_annotation = postprocess(group, group_annotation)
             log_it("Writing annotation to file.")
             group_annotation.to_gtf(output, mode="a")
             log_it("Done.")

@@ -196,10 +196,15 @@ def iterate_sequences(
             gs += idx[i][3] if T_max is None or T_max < idx[i][3] else T_max
             i += 1
         groups.append(i)
-    if log and len(groups) > 1: log_it(
-        f"Split fasta into {len(groups)} groups of sequences.",
-        extra={"timer": False},
-    )
+
+    if log:
+        seqs = "" if len(idx) == 1 else "s"
+        gros = "" if len(groups) == 2 else "s"
+        log_it(
+            f"Split {len(idx)} sequence{seqs} into "
+                f"{len(groups)-1} group{gros}.",
+            extra={"timer": False},
+        )
 
     for g in range(1, len(groups)):
         raw_sequences = []

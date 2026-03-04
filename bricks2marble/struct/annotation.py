@@ -237,8 +237,9 @@ class Annotation:
                 )
             from ..tools.post import check_repeat_masked
             check_repeat_masked(self, fasta, remove=True)
-        for gene in self:
-            gene.clean(min_cds_length=min_cds_length)
+        if min_cds_length is not None:
+            for gene in self:
+                gene.clean(min_cds_length=min_cds_length)
 
     def at(
         self,
