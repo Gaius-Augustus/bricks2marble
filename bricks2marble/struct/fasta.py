@@ -368,10 +368,10 @@ class Sequence:
         the total length.
         """
         return Sequence(
-            np.r_[
+            np.concatenate((
                 self._sequence.reshape(1, -1),
-                sequence._sequence.reshape(1, -1)
-            ],
+                sequence._sequence.reshape(1, -1),
+            ), axis=1),
             name=self.name,
         )
 

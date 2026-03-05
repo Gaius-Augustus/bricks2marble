@@ -1,6 +1,7 @@
 import gzip
 import shutil
 import tempfile
+import textwrap
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -194,7 +195,6 @@ def _annotate(
     model_name: str = "Model",
     first_tx_id: int = 0,
 ) -> tuple[Annotation, int]:
-
     log_it(f"Start initial prediction of {fasta.N} chunks.")
     labels_fwd, labels_bwd = predict_func(fasta)
     log_it("Searching for errors.")
@@ -335,7 +335,7 @@ def _annotate(
     for seq in fasta:
         if labels_fwd is not None:
             regions = _split_regions(
-                labels_fwd[shift:shift+seq.N, :].flatten(),
+                labels_fwd[shift:shift+seq.N, :].flatten()[:seq.size],
                 strand="+",
             )
             if seq.name not in entries_fwd: entries_fwd[seq.name] = []
@@ -343,7 +343,7 @@ def _annotate(
 
         if labels_bwd is not None:
             regions = _split_regions(
-                labels_bwd[shift:shift+seq.N, :].flatten(),
+                labels_bwd[shift:shift+seq.N, :].flatten()[:seq.size],
                 strand="-",
             )
             if seq.name not in entries_bwd: entries_bwd[seq.name] = []
@@ -373,11 +373,12 @@ def annotate_genome(
     output: Path | str,
     log_file: Path | str | None = None,
     allow_extract_gz: bool = False,
-    min_group_size: int = 50_000_000,
-    T_max: int | None = None,
+    T_max: int = 500_000,
+    min_group_size: int | None = None,
     T_factors: list[int] | None = None,
     sort_reverse: bool | None = False,
     model_name: str = "Model",
+    split_seqnames: bool = True,
     repredict_func: Callable[[Fasta],
         tuple[np.ndarray, np.ndarray | None]
         | tuple[np.ndarray | None, np.ndarray]
@@ -406,21 +407,22 @@ def annotate_genome(
             error if the file already exists.
         log_file (Path | str, optional): The file to write a log to.
             Defaults to the same file path as `output`, except with the
-            suffix being replaced by `.out`.
+            suffix being replaced by `.log`.
         allow_extract_gz (bool, optional): If set to True, allows the
             input path to be a `.gz` file. For the duration of the
             annotation, this file will be extracted to a `.fa` file at
             the same location with a random name. This ensures that the
             same `.gz` file can be annotated multiple times at once, for
             example in a cluster. Defaults to False.
-        min_group_size (int, optional): Minimal number of nucleotides in
-            each group except for the last, which can be smaller.
-            Defaults to `50_000_000`.
         T_max (int, optional): If given, also resamples all sequences to
             the given chunksize. If all sequences in a group are smaller
             than `T_max`, the chunk size for that group is determined by
-            the largest sequence in the group. Defaults to no
-            resampling.
+            the largest sequence in the group. Defaults to `500_000`.
+        min_group_size (int, optional): Minimal number of nucleotides in
+            each group except for the last, which can be smaller.
+            Defaults to a standard computation. For `T_max=500_000` this
+            is `50_000_000`. For smaller `T_max`, this will increase by
+            the same factor.
         T_factors (list[int], optional): Imposes extra conditions on
             newly chosen values for the chunk length in case that all
             sequences in a group are smaller than `T_max`. A candidate
@@ -432,6 +434,8 @@ def annotate_genome(
             for no sorting. Defaults to False.
         model_name (str): Name of the model that is used, or any other
             identifier. This will be listed as the 'source' in the gtf.
+        split_seqnames (bool, optional): If True, shortens all sequence
+            names by cutting at the first whitespace. Defaults to True.
         repredict_func (Callable, optional): A function of the same
             nature as `predict_func`, but used for the second stage of
             predictions that solves mismatches of the first. The default
@@ -455,7 +459,9 @@ def annotate_genome(
         raise FileExistsError(
             f"The target output path {output} points to an existing file."
         )
-    if log_file is None: log_file = output.parent / f"{output.stem}.out"
+    if log_file is None: log_file = output.parent / f"{output.stem}.log"
+    if min_group_size is None:
+        min_group_size = int(50_000_000 * (500_000 / T_max))
 
     setup_logging(log_file)
 
@@ -501,6 +507,14 @@ def annotate_genome(
             extra={"timer": False},
         )
 
+    wrapper = textwrap.TextWrapper(
+        width=99,
+        initial_indent=" " * 13,
+        subsequent_indent=" " * 13,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+
     try:
         first_tx_id = 0
         for i, group in enumerate(iterate_sequences(
@@ -511,9 +525,11 @@ def annotate_genome(
             sort_reverse=sort_reverse,
             log=True,
         )):
+            if split_seqnames: group.rename(lambda x: x.split(" ")[0])
             log_it(
                 f"\n{f'Group {i+1}':=^99}\n"
                     f"> sequences: {len(group)}\n"
+                    f"{wrapper.fill(', '.join([s.name for s in group]))}\n"
                     f"> chunk length: {group.T}\n",
                 extra={"timer": False},
             )
