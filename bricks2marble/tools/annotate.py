@@ -8,7 +8,7 @@ import numpy as np
 
 from ..io import iterate_sequences
 from ..log import log_it, setup_logging
-from ..struct import FASTA, Annotation, FeatureType, GTFEntry, Region, Sequence
+from ..struct import Annotation, Fasta, FeatureType, GTFEntry, Region, Sequence
 
 HMM_STATE_AGGREGATION = np.array([
     [1., 0., 0., 0., 0.],  # IR
@@ -178,13 +178,13 @@ def _first_non_zero(x: np.ndarray) -> int:
 
 
 def _annotate(
-    fasta: FASTA,
-    predict_func: Callable[[FASTA],
+    fasta: Fasta,
+    predict_func: Callable[[Fasta],
         tuple[np.ndarray, np.ndarray | None]
         | tuple[np.ndarray | None, np.ndarray]
         | tuple[np.ndarray, np.ndarray],
     ],
-    repredict_func: Callable[[FASTA],
+    repredict_func: Callable[[Fasta],
         tuple[np.ndarray, np.ndarray | None]
         | tuple[np.ndarray | None, np.ndarray]
         | tuple[np.ndarray, np.ndarray],
@@ -260,9 +260,9 @@ def _annotate(
         )
 
         if repredict_func is not None:
-            repred_fwd, repred_bwd = repredict_func(FASTA(repred_seqs))
+            repred_fwd, repred_bwd = repredict_func(Fasta(repred_seqs))
         else:
-            repred_fwd, repred_bwd = predict_func(FASTA(repred_seqs))
+            repred_fwd, repred_bwd = predict_func(Fasta(repred_seqs))
 
         log_it("Merging repredictions.")
 
@@ -365,7 +365,7 @@ def _annotate(
 
 def annotate_genome(
     fasta: Path | str,
-    predict_func: Callable[[FASTA],
+    predict_func: Callable[[Fasta],
         tuple[np.ndarray, np.ndarray | None]
         | tuple[np.ndarray | None, np.ndarray]
         | tuple[np.ndarray, np.ndarray],
@@ -378,14 +378,14 @@ def annotate_genome(
     T_factors: list[int] | None = None,
     sort_reverse: bool | None = False,
     model_name: str = "Model",
-    repredict_func: Callable[[FASTA],
+    repredict_func: Callable[[Fasta],
         tuple[np.ndarray, np.ndarray | None]
         | tuple[np.ndarray | None, np.ndarray]
         | tuple[np.ndarray, np.ndarray],
     ] | None = None,
     reprediction_factor: float = 0.5,
     repredict_exon_at_boundary: int | None = None,
-    postprocess: Callable[[FASTA, Annotation], Annotation] | None = None,
+    postprocess: Callable[[Fasta, Annotation], Annotation] | None = None,
 ) -> None:
     """Generate a genome annotation of a given fasta file.
 
@@ -394,7 +394,7 @@ def annotate_genome(
 
     Args:
         fasta (Path | str): Path to a fasta file.
-        predict_func (Callable): A function that takes a :class:`FASTA`
+        predict_func (Callable): A function that takes a :class:`Fasta`
             object as input and outputs one or two numpy arrays. Each of
             these arrays have to have shape ``(N, T)``, where ``N`` is
             the number of sequences in the given `fasta` and ``T`` is

@@ -4,9 +4,9 @@ from pathlib import Path
 
 import numpy as np
 
-from ..struct.fasta import FASTA, Sequence
-from .util import index, largest_close_to_divisible_by
 from ..log import log_it
+from ..struct.fasta import Fasta, Sequence
+from .util import index, largest_close_to_divisible_by
 
 
 def load_fasta(
@@ -15,8 +15,8 @@ def load_fasta(
     drop_remainder: bool = False,
     n_seqs: int | None = None,
     target_seq: str | None = None,
-) -> FASTA:
-    """Loads a :class:`FASTA` object that makes handling a nucleotide
+) -> Fasta:
+    """Loads a :class:`Fasta` object that makes handling a nucleotide
     sequence easier. Can be either a fasta file or a gzipped fasta file.
 
     Args:
@@ -25,13 +25,13 @@ def load_fasta(
             sequence chunks of this size. Sequences in the file that
             have a length not divisible by ``T`` are padded with ``-1``.
             Defaults to the total length of the genome, meaning that the
-            FASTA file only contains one long sequence.
+            Fasta file only contains one long sequence.
         drop_remainder (bool, optional): If set to True, deletes the
             last chunk in each sequence, if the sequence has a length
             not divisable by ``T``. Defaults to False.
         n_seqs (int, optional): Stops reading the fasta file after this
             many sequences. Defaults to reading all sequences.
-        target_seq (str, optional): Scans the FASTA file from the start
+        target_seq (str, optional): Scans the Fasta file from the start
             up to the given sequence name and then only returns this
             sequence. Defaults to all sequences.
     """
@@ -86,14 +86,14 @@ def load_fasta(
             name=name,
         ) for seq, name in zip(raw_sequences, name_sequences)
     ]
-    fasta = FASTA(sequences)
+    fasta = Fasta(sequences)
     if T is not None:
         fasta.resample(T, drop_remainder=drop_remainder)
     return fasta
 
 
 def write_fasta(
-    fasta: FASTA,
+    fasta: Fasta,
     path: Path| str,
     line_length: int = 80,
 ) -> None:
@@ -119,8 +119,8 @@ def write_fasta(
                 f.write(translated[i:i+line_length]+"\n")
 
 
-def fasta_from_string(string: str) -> FASTA:
-    """Creates a :class:`FASTA` object with a single sequence from a
+def fasta_from_string(string: str) -> Fasta:
+    """Creates a :class:`Fasta` object with a single sequence from a
     continuous string of nucleotides.
     """
     table = bytearray([4]*256)
@@ -139,7 +139,7 @@ def fasta_from_string(string: str) -> FASTA:
         )[np.newaxis, :],
         name="seq1",
     )]
-    return FASTA(sequences)
+    return Fasta(sequences)
 
 
 def iterate_sequences(
@@ -149,12 +149,12 @@ def iterate_sequences(
     T_factors: list[int] | None = None,
     sort_reverse: bool | None = False,
     log: bool = False,
-) -> Generator[FASTA, None, None]:
-    """Yields FASTA objects from the given fasta file in a sorted
+) -> Generator[Fasta, None, None]:
+    """Yields Fasta objects from the given fasta file in a sorted
     manner. This can be helpful when processing sequences with a
     limited ammount of RAM.
 
-    Each returned FASTA is a group of whole sequences from the given
+    Each returned Fasta is a group of whole sequences from the given
     file. This leads to large sequences being returned on their own and
     small sequences being grouped together.
 
@@ -218,7 +218,7 @@ def iterate_sequences(
                 name_sequences.append(idx[k][0])
                 if idx[k][3] > max_len: max_len = idx[k][3]
 
-        group = FASTA([Sequence(
+        group = Fasta([Sequence(
             np.frombuffer(
                 seq.translate(translation_table),
                 dtype=np.int8,

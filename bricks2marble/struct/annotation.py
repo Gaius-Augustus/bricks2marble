@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Callable, Literal
 from .transcript import FeatureType, GTFEntry, Transcript
 
 if TYPE_CHECKING:
-    from .fasta import FASTA
+    from .fasta import Fasta
 
 
 class Gene:
@@ -82,25 +82,6 @@ class Gene:
         for k in self._transcripts:
             self._transcripts[k].finalize()
 
-    def clean(self, min_cds_length: int | None = None) -> None:
-        """Removes any transcripts that do not meet the given
-        requirements.
-
-        Args:
-            min_cds_length (int, optional): Minimal length of coding
-                regions. All transcripts with a shorter coding region
-                will be deleted. Defaults to no checks for length.
-        """
-        drop_tx = []
-        for k in self._transcripts:
-            if (
-                min_cds_length is not None
-                and self._transcripts[k].cds_length() < min_cds_length
-            ):
-                drop_tx.append(k)
-        for k in drop_tx:
-            self._transcripts.pop(k)
-
     def to_list(self) -> list[GTFEntry]:
         if len(self._transcripts) == 0:
             return []
@@ -171,75 +152,62 @@ class Annotation:
         for gene in self:
             gene.finalize()
 
+    def remove(self, obj: Transcript | Gene) -> None:
+        """Remove the given transcript or gene from the annotation.
+        Raises an error if it does not exist.
+        """
+        if isinstance(obj, Gene):
+            self._genes.pop(obj.id)
+        elif isinstance(obj, Transcript):
+            self._genes[obj.gene_id]._transcripts.pop(obj.id)
+
     def clean(
         self,
-        min_cds_length: int | None = None,
-        fasta: "FASTA | None" = None,
-        boundaries: bool = False,
-        start_codons: list[str] | bool = True,
-        stop_codons: list[str] | bool = True,
-        intron_begin: list[str] | bool = True,
-        intron_end: list[str] | bool = True,
-        inframe_stop_codons: list[str] | bool = True,
-        no_repeats: bool = False,
+        fasta: "Fasta",
+        inframe_stop_codons: bool = True,
+        min_coding_length: int | None = None,
+        exon_boundaries: bool = False,
+        coding_repeats: bool = False,
+        out_of_bounds: bool = False,
     ) -> None:
         """Removes any transcripts that do not meet the given
-        requirements.
+        requirements. For fine-grained options, have a look at the
+        corresponding functions in `bricks2marble.tools.post`.
 
         Args:
-            min_cds_length (int, optional): Minimal length of coding
+            fasta (Fasta): A fasta is required to be specified for all
+                subsequent arguments.
+            inframe_stop_codons (list[str], optional): Removes all
+                transcripts with inframe stop codons from the
+                annotation. Defaults to True.
+            min_coding_length (int, optional): Minimal length of coding
                 regions. All transcripts with a shorter coding region
                 will be deleted. Defaults to no checks for length.
-            fasta (FASTA, optional): If a FASTA is given, all
-                transcripts are removed that do not start or end at
-                specific start-/stop-codons. Also removes any
-                out-of-bounds transcripts.
-            start_codons (list[str], optional): A list of strings of
-                possible start codons or a boolean value. If true,
-                defaults to only "ATG" and if false, does no checks for
-                start codons.
-            stop_codons (list[str], optional): A list of strings of
-                possible stop codons or a boolean value. If true,
-                defaults to "TAG", "TAA" or "TGA" and if false, does no
-                checks for stop codons.
-            intron_begin (list[str], optional): A list of strings of
-                possible begin patterns of introns, or a boolean value.
-                If true, defaults to only "GT" and if false, does no
-                checks for begin patterns.
-            intron_end (list[str], optional): A list of strings of
-                possible end patterns of introns, or a boolean value. If
-                true, defaults to only "AG" and if false, does no checks
-                for end patterns.
-            inframe_stop_codons (list[str], optional): A list of strings
-                of possible stop codons or a boolean value. If true,
-                defaults to "TAG", "TAA" or "TGA" and if false, does no
-                checks for inframe stop codons.
+            exon_boundaries (bool, optional): Removes transcripts with
+                wrong exon boundaries from the annotation. Is based on
+                the default border codons. Defaults to no action.
+            coding_repeats (bool, optional): Removes transcripts that
+                have coding regions that overlap with repeats. Defaults
+                to no action.
+            out_of_bounds (bool, optional): Removes transcripts that are
+                out-of-bounds for the given fasta. Defaults to no
+                action.
         """
-        if boundaries:
-            if fasta is None:
-                raise ValueError(
-                    "If boundaries is True, a FASTA object has to be given."
-                )
-            from ..tools.post import check_annotation_boundaries
-            check_annotation_boundaries(
-                self, fasta,
-                start_codons=start_codons,
-                stop_codons=stop_codons,
-                intron_begin=intron_begin,
-                intron_end=intron_end,
-                inframe_stop_codons=inframe_stop_codons,
-                remove=True,
-            )
-        if no_repeats:
-            if fasta is None:
-                raise ValueError(
-                    "If no_repeats is True, a FASTA object has to be given."
-                )
-            from ..tools.post import check_repeat_masked
-            check_repeat_masked(self, fasta, remove=True)
-        if min_cds_length is not None:
-            for gene in self:
-                gene.clean(min_cds_length=min_cds_length)
+        if inframe_stop_codons:
+            from ..tools.post import check_inframe_stop_codons
+            check_inframe_stop_codons(self, fasta, remove=True)
+        if min_coding_length is not None:
+            from ..tools.post import check_min_coding_length
+            check_min_coding_length(self, min_coding_length, remove=True)
+        if exon_boundaries:
+            from ..tools.post import check_exon_boundaries
+            check_exon_boundaries(self, fasta, remove=True)
+        if coding_repeats:
+            from ..tools.post import check_coding_repeats
+            check_coding_repeats(self, fasta, remove=True)
+        if out_of_bounds:
+            from ..tools.post import check_out_of_bounds
+            check_out_of_bounds(self, fasta, remove=True)
 
     def at(
         self,
@@ -362,25 +330,25 @@ class Annotation:
     def extract_to_file(
         self,
         target: Literal["coding", "protein"],
-        fasta: "FASTA",
+        fasta: "Fasta",
         path: Path | str,
         mode: Literal["w", "a", "x"] = "w",
         line_width: int = 60,
         header_fn: Callable[[Gene, Transcript], str] | None = None,
         skip_empty: bool = True
     ) -> None:
-        """Combine Annotation and FASTA data to write a target sequence
+        """Combine Annotation and Fasta data to write a target sequence
         to a given file.
 
         Args:
             target (str): Can be either "coding" or "protein".
-            fasta (FASTA): Genome FASTA used to extract coding
+            fasta (Fasta): Genome Fasta used to extract coding
                 sequences.
-            path (Path | str): Output FASTA path.
+            path (Path | str): Output Fasta path.
             mode (Literal["w","a","x"], optional): File open mode.
                 Defaults to "w".
             line_width (int, optional): Wrap sequence to this line width
-                (FASTA style). Defaults to 60.
+                (Fasta style). Defaults to 60.
             header_fn (callable, optional): Custom header builder. If
                 None, uses:
                 "{gene_id}|{tx_id}|{seqname}:{start}-{end}({strand})".

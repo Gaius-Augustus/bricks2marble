@@ -125,7 +125,7 @@ class Sequence:
         sequences (list[Sequence]): An array of shape ``(N, T)`` which
             holds encoded nucleotides, where ``N`` is the number of
             sequences of length ``T``. This array is later accessed by
-            ``FASTA.nuc``.
+            ``Fasta.nuc``.
     """
 
     def __init__(
@@ -390,7 +390,7 @@ class Sequence:
         return f"Sequence({self.name!r}, {self.start}, {self.end})"
 
 
-class FASTA:
+class Fasta:
     """This class manages a sequence of nucleotides that is grouped into
     chunks of a given length with additional information about their
     origin (sequence name and range).
@@ -407,7 +407,7 @@ class FASTA:
         self._sequences = sequences
 
     def is_repeat_masked(self) -> bool:
-        """Checks if the FASTA has any repeat-masked positions and
+        """Checks if the Fasta has any repeat-masked positions and
         returns a corresponding boolean.
         """
         return any(seq.is_repeat_masked() for seq in self)
@@ -439,24 +439,22 @@ class FASTA:
     def T(self) -> int:
         return self.nuc.shape[1]
 
-    def complement(self, in_place: bool = False) -> "FASTA":
-        """Return a FASTA where every Sequence is complemented.
+    def complement(self, reverse: bool = False) -> "Fasta":
+        """Returns a new fasta with all sequences being complemented.
+        This will not reverse the sequence direction unless specified.
 
-        Order of sequences is preserved 1:1 with `self._sequences`.
-        If `in_place=True`, replaces the internal sequences and returns `self`.
-        Otherwise returns a new FASTA.
+        Args:
+            reverse (bool, optional): Also reverses the sequence
+                direction. For this, all sequences need to be resampled
+                to one chunk only. Defaults to False.
         """
-        complemented = [seq.complement() for seq in self._sequences]
-        if in_place:
-            self._sequences = complemented
-            return self
-        return FASTA(complemented)
+        return Fasta([s.complement(reverse=reverse) for s in self])
 
-    def resample(self, T: int, drop_remainder: bool = False) -> "FASTA":
-        """Resamples the :class:`FASTA` object such that each sequence
+    def resample(self, T: int, drop_remainder: bool = False) -> "Fasta":
+        """Resamples the :class:`Fasta` object such that each sequence
         is grouped into chunks of the given length. This can lead to
         differently padded sequences.
-        This method does not create a new FASTA object but is an
+        This method does not create a new Fasta object but is an
         in-place operation.
 
         Args:
@@ -525,7 +523,7 @@ class FASTA:
         }
 
     def rename(self, name: str | Callable[[str], str]) -> None:
-        """Changes the name of all sequences in this FASTA object.
+        """Changes the name of all sequences in this Fasta object.
 
         Args:
             name (str | callable): If a string is given, changes the
@@ -541,18 +539,18 @@ class FASTA:
         for seq in self._sequences:
             seq.name = rename(seq.name)
 
-    def copy(self) -> "FASTA":
-        return FASTA([seq.copy() for seq in self._sequences])
+    def copy(self) -> "Fasta":
+        return Fasta([seq.copy() for seq in self._sequences])
 
     @overload
     def __getitem__(self, key: int | str) -> Sequence:
         ...
     @overload
-    def __getitem__(self, key: slice) -> "FASTA":
+    def __getitem__(self, key: slice) -> "Fasta":
         ...
-    def __getitem__(self, key: int | slice | str) -> "Sequence | FASTA":
+    def __getitem__(self, key: int | slice | str) -> "Sequence | Fasta":
         if isinstance(key, slice):
-            return FASTA(self._sequences[key])
+            return Fasta(self._sequences[key])
         if isinstance(key, int):
             return self._sequences[key]
         for seq in self._sequences:
@@ -567,4 +565,4 @@ class FASTA:
         return "[" + ", ".join(str(seq) for seq in self._sequences) + "]"
 
     def __repr__(self) -> str:
-        return "FASTA(" + ", ".join(str(seq) for seq in self._sequences) + ")"
+        return "Fasta(" + ", ".join(str(seq) for seq in self._sequences) + ")"
