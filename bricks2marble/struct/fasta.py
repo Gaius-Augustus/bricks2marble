@@ -176,15 +176,23 @@ class Sequence:
                 self._end = self._sequence.size
             return self._end
 
-    def complement(self) -> "Sequence":
+    def complement(self, reverse: bool = False) -> "Sequence":
         """Returns a new sequence object which is the complementary
-        strand to the current sequence. This will not reverse the order
-        of nucleotides.
+        strand to the current sequence. This will not reverse the
+        sequence direction unless specified.
+
+        Args:
+            reverse (bool, optional): Also reverses the sequence
+                direction. For this, the sequence needs to be resampled
+                to one chunk only. Defaults to False.
         """
-        seq = self._sequence.copy()
-        seq[seq < 4] = 3 - seq[seq < 4]
-        seq[seq > 4] = 13 - seq[seq > 4]
-        return Sequence(seq, name=self.name, start=self.start, end=self.end)
+        s = self.copy()
+        if reverse:
+            s.resample()
+            s._sequence = s._sequence[:, ::-1]
+        s._sequence[s._sequence < 4] = 3 - s._sequence[s._sequence < 4]
+        s._sequence[s._sequence > 4] = 13 - s._sequence[s._sequence > 4]
+        return s
 
     def is_repeat_masked(self) -> bool:
         """Checks if the sequence has any repeat-masked positions and
@@ -287,11 +295,14 @@ class Sequence:
         /,
     ) -> "Sequence":
         """Returns a :class:`Sequence` object that only includes
-        nucleotides from the specified range.
+        nucleotides from the specified range. The sequence is resampled
+        to one chunk only.
 
         Args:
-            start (int, optional): First index of the specified range.
-            end (int, optional): Last index of the specified range.
+            start (int, optional): First index of the specified range,
+                starting at 0.
+            end (int, optional): Last index of the specified range,
+                itself excluded.
         """
         if end is None:
             if start is None:
@@ -313,7 +324,7 @@ class Sequence:
             start=start,  # type: ignore
             end=end,
         )
-        return seq#.resample(self.T)
+        return seq
 
     def occurences(
         self,
@@ -348,9 +359,25 @@ class Sequence:
         translated = self.flat.tobytes().translate(translation_table)
         return translated.decode("utf-8")
 
+    def join(self, sequence: "Sequence") -> "Sequence":
+        """Returns a new sequence that is the concatenation of the
+        current and given sequence. The name will be the same as the
+        current sequence. The start and end indices of the new sequence
+        are set to the default values and might not correspond to the
+        indices of the split sequences. The new sequence is resampled to
+        the total length.
+        """
+        return Sequence(
+            np.r_[
+                self._sequence.reshape(1, -1),
+                sequence._sequence.reshape(1, -1)
+            ],
+            name=self.name,
+        )
+
     def copy(self) -> "Sequence":
         return Sequence(
-            self._sequence,
+            self._sequence.copy(),
             name=self.name,
             start=self.start,
             end=self.end,

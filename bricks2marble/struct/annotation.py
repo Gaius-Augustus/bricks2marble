@@ -1,7 +1,7 @@
 import csv
+import textwrap
 from collections import OrderedDict
 from collections.abc import Iterator
-import textwrap
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Literal
 
@@ -398,14 +398,12 @@ class Annotation:
 
         with open(path, mode) as fh:
             for gene in self:
+                sequence = fasta[gene.seqname]
                 for tx in gene:
-                    try:
-                        if target == "coding":
-                            seq = tx.coding_sequence(fasta)
-                        elif target == "protein":
-                            seq = tx.protein_sequence(fasta)
-                    except Exception as e:
-                        raise e
+                    if target == "coding":
+                        seq = tx.coding_sequence(sequence).string()
+                    elif target == "protein":
+                        seq = tx.protein_sequence(sequence)
 
                     if skip_empty and (seq is None or len(seq) == 0):
                         continue
