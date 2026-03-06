@@ -143,11 +143,11 @@ def fasta_from_string(string: str) -> Fasta:
 
 
 def iterate_sequences(
-    fasta: Path,
-    min_group_size: int = 50_000_000,
+    fasta: Path | str,
     T_max: int | None = None,
+    delta: float = 0.1,
     T_factors: list[int] | None = None,
-    sort_reverse: bool | None = False,
+    min_sequence_size: int | None = None,
     log: bool = False,
 ) -> Generator[Fasta, None, None]:
     """Yields Fasta objects from the given fasta file in a sorted
@@ -155,29 +155,33 @@ def iterate_sequences(
     limited ammount of RAM.
 
     Each returned Fasta is a group of whole sequences from the given
-    file. This leads to large sequences being returned on their own and
-    small sequences being grouped together.
+    file. Smaller sequences will be put into their own groups.
 
     Args:
-        min_group_size (int, optional): Minimal number of nucleotides in
-            each group except for the last, which can be smaller.
-            Defaults to `50_000_000`.
+        fasta (Path): The path to a fasta to iterate over.
         T_max (int, optional): If given, also resamples all sequences to
             the given chunksize. If all sequences in a group are smaller
             than `T_max`, the chunk size for that group is determined by
             the largest sequence in the group. Defaults to no
             resampling.
+        T_delta (float, optional): The value `T_max * T_delta` is the
+            minimal size of sequences in the first group. Subsequent
+            groups have sequences larger than `T * T_delta`, where `T`
+            is the chunk length of this group. Defaults to 0.1.
         T_factors (list[int], optional): Imposes extra conditions on
             newly chosen values for the chunk length in case that all
             sequences in a group are smaller than `T_max`. A candidate
             needs to also be divisible by the given numbers. Defaults to
             no such conditions.
-        sort_reverse (bool, optional): Whether to sort the sequences by
-            size before grouping them. If true, sorts in descending
-            order and if false, sorts in ascending order. Set to None
-            for no sorting. Defaults to False.
+        min_sequence_size (int, optional): If specified, does not return
+            sequences with a lower number of nucleotides. Defaults to
+            returning all sequence lengths.
+        log (bool, optional): Wether to log process. Only applicable if
+            wrapped in another function that starts a logging process.
+            Defaults to False.
     """
-    idx = index(fasta, sort_reverse=sort_reverse)
+    fasta = Path(fasta)
+    idx = index(fasta, sort_reverse=True)
 
     table = bytearray([4]*256)
     mappings = {a: b for a, b in zip(
@@ -188,14 +192,33 @@ def iterate_sequences(
         table[k] = v
     translation_table = bytes(table)
 
-    groups = [0]
-    i = 0
-    while i < len(idx):
-        gs = 0
-        while gs < min_group_size and i < len(idx):
-            gs += idx[i][3] if T_max is None or T_max < idx[i][3] else T_max
-            i += 1
-        groups.append(i)
+    if T_max is None:
+        groups = list(range(len(idx)))
+    else:
+        groups = [0]
+        group_T = [T_max]
+        i = 0
+        T = T_max
+        cont = True
+        while cont and i < len(idx):
+
+            while i < len(idx) and idx[i][3] >= (delta * T):
+                if (
+                    min_sequence_size is not None
+                    and idx[i][3] < min_sequence_size
+                ):
+                    cont = False
+                    break
+                last_len = idx[i][3]
+                i += 1
+
+            T_new = last_len if T_factors is None else (
+                largest_close_to_divisible_by(last_len, T_factors)
+            )
+            if i > groups[-1]:
+                groups.append(i)
+                group_T.append(T)
+            T = T_new
 
     if log:
         seqs = "" if len(idx) == 1 else "s"
@@ -227,11 +250,6 @@ def iterate_sequences(
         ) for seq, name in zip(raw_sequences, name_sequences)])
 
         if T_max is not None:
-            T = T_max
-            if max_len < T_max:
-                T = max_len if T_factors is None else (
-                    largest_close_to_divisible_by(max_len, T_factors)
-                )
-            group.resample(T)
+            group.resample(group_T[g])
 
         yield group

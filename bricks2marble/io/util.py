@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def index(
-    fasta: Path,
+    fasta: Path | str,
     sort_reverse: bool | None = None,
 ) -> list[tuple[str, int, int, int]]:
     """Returns the names of all sequences and their offsets and lengths

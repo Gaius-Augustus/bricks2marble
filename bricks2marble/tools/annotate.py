@@ -363,6 +363,72 @@ def _annotate(
     return annotation, last_tx_id
 
 
+def _annotate_genome(
+    fasta: Path | str,
+    predict_func: Callable[[Fasta],
+        tuple[np.ndarray, np.ndarray | None]
+        | tuple[np.ndarray | None, np.ndarray]
+        | tuple[np.ndarray, np.ndarray],
+    ],
+    output: Path | str,
+    T_max: int = 500_000,
+    T_delta: float = 0.1,
+    T_factors: list[int] | None = None,
+    min_sequence_size: int | None = 1_000,
+    model_name: str = "bricks2marble",
+    split_seqnames: bool = True,
+    repredict_func: Callable[[Fasta],
+        tuple[np.ndarray, np.ndarray | None]
+        | tuple[np.ndarray | None, np.ndarray]
+        | tuple[np.ndarray, np.ndarray],
+    ] | None = None,
+    reprediction_factor: float = 0.5,
+    repredict_exon_at_boundary: int | None = None,
+    postprocess: Callable[[Fasta, Annotation], Annotation] | None = None,
+) -> None:
+    wrapper = textwrap.TextWrapper(
+        width=99,
+        initial_indent=" " * 13,
+        subsequent_indent=" " * 13,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+
+    first_tx_id = 0
+    for i, group in enumerate(iterate_sequences(
+        fasta,
+        T_max=T_max,
+        delta=T_delta,
+        T_factors=T_factors,
+        min_sequence_size=min_sequence_size,
+        log=True,
+    )):
+        if split_seqnames: group.rename(lambda x: x.split(" ")[0])
+        log_it(
+            f"\n{f'Group {i+1}':=^99}\n"
+                f"> sequences: {len(group)}\n"
+                f"{wrapper.fill(', '.join([s.name for s in group]))}\n"
+                f"> chunk length: {group.T}\n",
+            extra={"timer": False},
+        )
+        group_annotation, last_tx_id = _annotate(
+            group,
+            predict_func=predict_func,
+            repredict_func=repredict_func,
+            reprediction_factor=reprediction_factor,
+            model_name=model_name,
+            exon_at_boundary=repredict_exon_at_boundary,
+            first_tx_id=first_tx_id,
+        )
+        if postprocess is not None:
+            log_it("Calling postprocessing function.")
+            group_annotation = postprocess(group, group_annotation)
+        log_it("Writing annotation to file.")
+        group_annotation.to_gtf(output, mode="a")
+        log_it("Done.")
+        first_tx_id = last_tx_id
+
+
 def annotate_genome(
     fasta: Path | str,
     predict_func: Callable[[Fasta],
@@ -374,10 +440,10 @@ def annotate_genome(
     log_file: Path | str | None = None,
     allow_extract_gz: bool = False,
     T_max: int = 500_000,
-    min_group_size: int | None = None,
+    T_delta: float = 0.1,
     T_factors: list[int] | None = None,
-    sort_reverse: bool | None = False,
-    model_name: str = "Model",
+    min_sequence_size: int | None = 1_000,
+    model_name: str = "bricks2marble",
     split_seqnames: bool = True,
     repredict_func: Callable[[Fasta],
         tuple[np.ndarray, np.ndarray | None]
@@ -414,26 +480,25 @@ def annotate_genome(
             the same location with a random name. This ensures that the
             same `.gz` file can be annotated multiple times at once, for
             example in a cluster. Defaults to False.
-        T_max (int, optional): If given, also resamples all sequences to
-            the given chunksize. If all sequences in a group are smaller
-            than `T_max`, the chunk size for that group is determined by
-            the largest sequence in the group. Defaults to `500_000`.
-        min_group_size (int, optional): Minimal number of nucleotides in
-            each group except for the last, which can be smaller.
-            Defaults to a standard computation. For `T_max=500_000` this
-            is `50_000_000`. For smaller `T_max`, this will increase by
-            the same factor.
+        T_max (int, optional): Size of chunks in the Fasta given to
+            `predict_func`. If all sequences in a group are smaller than
+            `T_max`, the chunk size for that group is determined by the
+            largest sequence in the group. Defaults to `500_000`.
+        T_delta (float, optional): The value `T_max * T_delta` is the
+            minimal size of sequences in the first group. Subsequent
+            groups have sequences larger than `T * T_delta`, where `T`
+            is the chunk length of this group. Defaults to 0.1.
         T_factors (list[int], optional): Imposes extra conditions on
             newly chosen values for the chunk length in case that all
             sequences in a group are smaller than `T_max`. A candidate
             needs to also be divisible by the given numbers. Defaults to
             no such conditions.
-        sort_reverse (bool, optional): Whether to sort the sequences by
-            size before grouping them. If true, sorts in descending
-            order and if false, sorts in ascending order. Set to None
-            for no sorting. Defaults to False.
-        model_name (str): Name of the model that is used, or any other
-            identifier. This will be listed as the 'source' in the gtf.
+        min_sequence_size (int, optional): If specified, does not return
+            sequences with a lower number of nucleotides. Defaults to
+            returning all sequence lengths.
+        model_name (str, optional): Name of the model that is used, or
+            any other identifier. This will be listed as the 'source' in
+            the gtf. Defaults to "bricks2marble".
         split_seqnames (bool, optional): If True, shortens all sequence
             names by cutting at the first whitespace. Defaults to True.
         repredict_func (Callable, optional): A function of the same
@@ -445,10 +510,10 @@ def annotate_genome(
             reprediction. A value of 1 means that the size is twice the
             size of the first predictions.
         repredict_exon_at_boundary (int, optional): If the model
-            predicts an exon within ``k`` positions left and right of
-            a break point, a reprediction will be made. This works only
-            if ``liberal=True``. Here, ``k`` is the given number for
-            this argument. Defaults to no additional checks for exons.
+            predicts an exon within ``k`` positions left and right of a
+            break point, a reprediction will be made. This works only if
+            ``liberal=True``. Here, ``k`` is the given number for this
+            argument. Defaults to no additional checks for exons.
         postprocess (callable, optional): An optional function that
             changes each annotation before writing it to the gtf file.
             Useful for cleaning up errors from the prediction.
@@ -460,8 +525,6 @@ def annotate_genome(
             f"The target output path {output} points to an existing file."
         )
     if log_file is None: log_file = output.parent / f"{output.stem}.log"
-    if min_group_size is None:
-        min_group_size = int(50_000_000 * (500_000 / T_max))
 
     setup_logging(log_file)
 
@@ -469,13 +532,8 @@ def annotate_genome(
         f"{'':-^99}\n|{f'{model_name} genome annotation': ^97}|\n{'':-^99}\n"
             f"> target genome file: {fasta}\n"
             f"> output annotation file: {output}\n"
-            f"> minimal group size: {min_group_size}\n"
             f"> maximal chunk length: {T_max}\n"
             f"> forced divisors of the chunk length: {T_factors}\n"
-            f"> sequence length sorting: "
-            f"{'None' if sort_reverse is None else (
-                'descending' if sort_reverse else 'ascending'
-            )}\n"
             f"> reprediction factor: {reprediction_factor}\n"
             f"> repredict exons near boundaries: {(
                 'None' if repredict_exon_at_boundary is None else
@@ -485,74 +543,39 @@ def annotate_genome(
         extra={"timer": False},
     )
 
-    fasta_was_gz = False
+    def _call_annotate(fasta_file: Path | str):
+        _annotate_genome(
+            fasta=fasta_file,
+            predict_func=predict_func,
+            output=output,
+            T_max=T_max,
+            T_delta=T_delta,
+            T_factors=T_factors,
+            min_sequence_size=min_sequence_size,
+            model_name=model_name,
+            split_seqnames=split_seqnames,
+            repredict_func=repredict_func,
+            reprediction_factor=reprediction_factor,
+            repredict_exon_at_boundary=repredict_exon_at_boundary,
+            postprocess=postprocess,
+        )
+
     if fasta.suffix == ".gz":
         if not allow_extract_gz: raise RuntimeError(
             "Given fasta file is a .gz archive but extracting is not allowed."
         )
-        fasta_was_gz = True
-        tmp = tempfile.NamedTemporaryFile(delete=False)
-        log_it(
-            "Given file is an archive and has to be extracted.\n"
-            f"> using temporary file location:\n\t{tmp.name}",
-            extra={"timer": False},
-        )
-        with gzip.open(fasta, "rb") as f_fasta_gz:
-            shutil.copyfileobj(f_fasta_gz, tmp)
-        tmp.close()
-        fasta = Path(tmp.name)
-        log_it(
-            "Extraction complete. The temporary file will be deleted "
-            "once the annotation is done.",
-            extra={"timer": False},
-        )
-
-    wrapper = textwrap.TextWrapper(
-        width=99,
-        initial_indent=" " * 13,
-        subsequent_indent=" " * 13,
-        break_long_words=False,
-        break_on_hyphens=False,
-    )
-
-    try:
-        first_tx_id = 0
-        for i, group in enumerate(iterate_sequences(
-            fasta,
-            min_group_size=min_group_size,
-            T_max=T_max,
-            T_factors=T_factors,
-            sort_reverse=sort_reverse,
-            log=True,
-        )):
-            if split_seqnames: group.rename(lambda x: x.split(" ")[0])
+        with tempfile.NamedTemporaryFile(delete=True) as tmp:
             log_it(
-                f"\n{f'Group {i+1}':=^99}\n"
-                    f"> sequences: {len(group)}\n"
-                    f"{wrapper.fill(', '.join([s.name for s in group]))}\n"
-                    f"> chunk length: {group.T}\n",
+                "Given file is an archive and has to be extracted.\n"
+                f"> using temporary file location:\n\t{tmp.name}",
                 extra={"timer": False},
             )
-            group_annotation, last_tx_id = _annotate(
-                group,
-                predict_func=predict_func,
-                repredict_func=repredict_func,
-                reprediction_factor=reprediction_factor,
-                model_name=model_name,
-                exon_at_boundary=repredict_exon_at_boundary,
-                first_tx_id=first_tx_id,
-            )
-            if postprocess is not None:
-                log_it("Calling postprocessing function.")
-                group_annotation = postprocess(group, group_annotation)
-            log_it("Writing annotation to file.")
-            group_annotation.to_gtf(output, mode="a")
-            log_it("Done.")
-            first_tx_id = last_tx_id
-    finally:
-        if fasta_was_gz:
-            fasta.unlink()
-            log_it(
-                f"Deleted temporary file {fasta.name}",
-                extra={"timer": False},
-            )
+            with gzip.open(fasta, "rb") as f_fasta_gz:
+                shutil.copyfileobj(f_fasta_gz, tmp)
+
+            fasta = Path(tmp.name)
+            _call_annotate(fasta)
+        return
+    _call_annotate(fasta)
+
+    log_it(f"{'':-^99}\n|{'Finished': ^97}|\n{'':-^99}\n")
