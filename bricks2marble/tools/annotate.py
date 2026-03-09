@@ -2,6 +2,7 @@ import gzip
 import shutil
 import tempfile
 import textwrap
+from collections.abc import Container
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -203,7 +204,7 @@ def _annotate(
     repred_index = []
     repred_strand = []
     repred_sequence = []
-    repred_t = int(fasta.T * reprediction_factor)
+    repred_t = int(2 * fasta.T * reprediction_factor)
     total_mis_fwd = 0
     total_mis_bwd = 0
     total_mis_both = 0
@@ -374,8 +375,10 @@ def _annotate_genome(
     T_max: int = 500_000,
     T_delta: float = 0.1,
     T_factors: list[int] | None = None,
-    min_sequence_size: int | None = 1_000,
     model_name: str = "bricks2marble",
+    min_sequence_size: int | None = 1_000,
+    include_seqs: Container[str] | None = None,
+    exclude_seqs: Container[str] | None = None,
     split_seqnames: bool = True,
     repredict_func: Callable[[Fasta],
         tuple[np.ndarray, np.ndarray | None]
@@ -401,9 +404,11 @@ def _annotate_genome(
         delta=T_delta,
         T_factors=T_factors,
         min_sequence_size=min_sequence_size,
+        include=include_seqs,
+        exclude=exclude_seqs,
+        split_name=split_seqnames,
         log=True,
     )):
-        if split_seqnames: group.rename(lambda x: x.split(" ")[0])
         log_it(
             f"\n{f'Group {i+1}':=^99}\n"
                 f"> sequences: {len(group)}\n"
@@ -442,8 +447,10 @@ def annotate_genome(
     T_max: int = 500_000,
     T_delta: float = 0.1,
     T_factors: list[int] | None = None,
-    min_sequence_size: int | None = 1_000,
     model_name: str = "bricks2marble",
+    min_sequence_size: int | None = 1_000,
+    include_seqs: Container[str] | None = None,
+    exclude_seqs: Container[str] | None = None,
     split_seqnames: bool = True,
     repredict_func: Callable[[Fasta],
         tuple[np.ndarray, np.ndarray | None]
@@ -493,12 +500,22 @@ def annotate_genome(
             sequences in a group are smaller than `T_max`. A candidate
             needs to also be divisible by the given numbers. Defaults to
             no such conditions.
-        min_sequence_size (int, optional): If specified, does not return
-            sequences with a lower number of nucleotides. Defaults to
-            returning all sequence lengths.
         model_name (str, optional): Name of the model that is used, or
             any other identifier. This will be listed as the 'source' in
             the gtf. Defaults to "bricks2marble".
+        min_sequence_size (int, optional): If specified, does not return
+            sequences with a lower number of nucleotides. Defaults to
+            returning all sequence lengths.
+        include_seqs (Container[str], optional): Container of sequence
+            names to include in the annotation. The sequence names are
+            expected to be also split at the first whitespace, if
+            `split_seqnames` is True. Defaults to all sequences.
+        exclude_seqs (Container[str], optional): Container of sequence
+            names to exclude in the annotation. The sequence names are
+            expected to be also split at the first whitespace, if
+            `split_seqnames` is True. If a name is in `include_seqs` and
+            `exclude_seqs`, it will be excluded. Defaults to no excluded
+            sequences.
         split_seqnames (bool, optional): If True, shortens all sequence
             names by cutting at the first whitespace. Defaults to True.
         repredict_func (Callable, optional): A function of the same
@@ -516,7 +533,10 @@ def annotate_genome(
             argument. Defaults to no additional checks for exons.
         postprocess (callable, optional): An optional function that
             changes each annotation before writing it to the gtf file.
-            Useful for cleaning up errors from the prediction.
+            Useful for cleaning up errors from the prediction. The
+            function takes a :class:`Fasta` and an :class:`Annotation`
+            object as arguments and returns an :class:`Annotation`
+            object.
     """
     fasta = Path(fasta)
     output = Path(output)
@@ -551,8 +571,10 @@ def annotate_genome(
             T_max=T_max,
             T_delta=T_delta,
             T_factors=T_factors,
-            min_sequence_size=min_sequence_size,
             model_name=model_name,
+            min_sequence_size=min_sequence_size,
+            include_seqs=include_seqs,
+            exclude_seqs=exclude_seqs,
             split_seqnames=split_seqnames,
             repredict_func=repredict_func,
             reprediction_factor=reprediction_factor,
@@ -578,4 +600,7 @@ def annotate_genome(
         return
     _call_annotate(fasta)
 
-    log_it(f"{'':-^99}\n|{'Finished': ^97}|\n{'':-^99}\n")
+    log_it(
+        f"\n{'':-^99}\n|{'Finished': ^97}|\n{'':-^99}",
+        extra={"timer": False},
+    )

@@ -110,6 +110,21 @@ def one_hot(
     return encoded
 
 
+def nucleotides_to_kmers(nuc: np.ndarray, k: int = 3) -> np.ndarray:
+    nuc[nuc > 4] = nuc[nuc > 4] - 5
+    nuc = np.asarray(nuc, dtype=np.uint16)
+    nuc = nuc[:nuc.size//k*k].reshape(-1, k)
+    shifts = 3 * np.arange(k-1, -1, -1, dtype=np.uint16)
+    return np.bitwise_or.reduce(nuc << shifts, axis=1)
+
+
+def complement(nuc: np.ndarray, reverse: bool = False) -> np.ndarray:
+    if reverse: nuc = nuc[..., ::-1]
+    nuc[nuc < 4] = 3 - nuc[nuc < 4]
+    nuc[nuc > 4] = 13 - nuc[nuc > 4]
+    return nuc
+
+
 class Sequence:
     """Class representing a single nucleotide sequence or a continuous
     subsequence of it. Each :class:`Sequence` has the name of its origin
@@ -147,6 +162,10 @@ class Sequence:
     @property
     def flat(self) -> np.ndarray:
         return self._sequence.flatten()[:self.size]
+
+    @property
+    def codons(self) -> np.ndarray:
+        return nucleotides_to_kmers(self.flat)
 
     @property
     def size(self) -> int:
@@ -187,11 +206,8 @@ class Sequence:
                 to one chunk only. Defaults to False.
         """
         s = self.copy()
-        if reverse:
-            s.resample()
-            s._sequence = s._sequence[:, ::-1]
-        s._sequence[s._sequence < 4] = 3 - s._sequence[s._sequence < 4]
-        s._sequence[s._sequence > 4] = 13 - s._sequence[s._sequence > 4]
+        if reverse: s.resample()
+        s._sequence = complement(s._sequence, reverse=reverse)
         return s
 
     def is_repeat_masked(self) -> bool:
@@ -368,10 +384,7 @@ class Sequence:
         the total length.
         """
         return Sequence(
-            np.concatenate((
-                self._sequence.reshape(1, -1),
-                sequence._sequence.reshape(1, -1),
-            ), axis=1),
+            np.r_[self.flat, sequence.flat][np.newaxis, :],
             name=self.name,
         )
 

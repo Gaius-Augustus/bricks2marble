@@ -1,4 +1,8 @@
+import numpy as np
+
+from ..io import fasta_from_string
 from ..struct import Annotation, Fasta, FeatureType, Transcript
+from ..struct.fasta import complement, nucleotides_to_kmers
 
 
 def check_min_coding_length(
@@ -48,14 +52,20 @@ def check_inframe_stop_codons(
     """
     if codons is None: codons = {"TAG", "TAA", "TGA"}
 
+    c = [nucleotides_to_kmers(fasta_from_string(i)[0].flat) for i in codons]
+
     txs = []
     for gene in annotation:
-        seq = fasta[gene.seqname]
+        seq = fasta[gene.seqname].flat
         for tx in gene:
-            s = tx.coding_sequence(seq).string().upper()
-            L = len(s)
-            if L >= 6 and any(s[i:i+3] in codons for i in range(0, L-3, 3)):
-                txs.append(tx)
+            if tx.cds_length() < 6: continue
+            s = np.r_[
+                *(seq[cds[0]:cds[1]] for cds in tx.coords(FeatureType.CDS))
+            ]
+            if tx.strand == "-": s = complement(s, reverse=True)
+            s3 = nucleotides_to_kmers(s)[:-1]
+
+            if np.any(np.isin(s3, c)): txs.append(tx)
 
     if remove:
         for tx in txs: annotation.remove(tx)
@@ -120,7 +130,7 @@ def check_exon_boundaries(
             kmer = (
                 seq.positions(tx.start, tx.start+3) if tx.strand == "+"
                 else seq.positions(tx.end-3, tx.end).complement(reverse=True)
-            )
+            ).string()
             if kmer.upper() not in start_codons:
                 wrong_start.append(tx)
                 continue
@@ -128,7 +138,7 @@ def check_exon_boundaries(
             kmer = (
                 seq.positions(tx.end-3, tx.end) if tx.strand == "+" else
                 seq.positions(tx.start, tx.start+3).complement(reverse=True)
-            )
+            ).string()
             if kmer.upper() not in stop_codons:
                 wrong_stop.append(tx)
                 continue
@@ -141,7 +151,7 @@ def check_exon_boundaries(
                         seq.positions(
                             entry.end-2, entry.end,
                         ).complement(reverse=True)
-                    )
+                    ).string()
                     if kmer.upper() not in intron_begin:
                         wrong_begin.append(tx)
                         continue
@@ -151,7 +161,7 @@ def check_exon_boundaries(
                         seq.positions(
                             entry.start, entry.start+2,
                         ).complement(reverse=True)
-                    )
+                    ).string()
                     if kmer.upper() not in intron_end:
                         wrong_end.append(tx)
                         continue
