@@ -1,7 +1,7 @@
 import csv
 import textwrap
 from collections import OrderedDict
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Literal
 
@@ -118,6 +118,7 @@ class Annotation:
 
     def __init__(self) -> None:
         self._genes: OrderedDict[str, Gene] = OrderedDict()
+        self._sequences: dict[str, list[str]] = OrderedDict()
 
     def add(self, entry: GTFEntry) -> None:
         """Adds the given gtf entry to the gene.
@@ -134,6 +135,9 @@ class Annotation:
         if gene_id not in self._genes:
             self._genes[gene_id] = Gene(gene_id)
         self._genes[gene_id].add(entry)
+        if entry.name not in self._sequences:
+            self._sequences[entry.name] = []
+        self._sequences[entry.name].append(gene_id)
 
     def rename(self, name: str | Callable[[str], str]) -> None:
         """Changes the names of all sequences in this annotation.
@@ -158,6 +162,7 @@ class Annotation:
         """
         if isinstance(obj, Gene):
             self._genes.pop(obj.id)
+            self._sequences[obj.seqname].remove(obj.id)
         elif isinstance(obj, Transcript):
             self._genes[obj.gene_id]._transcripts.pop(obj.id)
 
@@ -257,7 +262,7 @@ class Annotation:
                 if self._genes[gid].seqname != sequence:
                     drop_keys.append(gid)
             for gid in drop_keys:
-                self._genes.pop(gid)
+                self.remove(self._genes[gid])
 
         if start is not None:
             drop_keys = []
@@ -265,7 +270,7 @@ class Annotation:
                 if self._genes[gid].start < start:
                     drop_keys.append(gid)
             for gid in drop_keys:
-                self._genes.pop(gid)
+                self.remove(self._genes[gid])
 
         if end is not None:
             drop_keys = []
@@ -273,7 +278,7 @@ class Annotation:
                 if self._genes[gid].end >= end:
                     drop_keys.append(gid)
             for gid in drop_keys:
-                self._genes.pop(gid)
+                self.remove(self._genes[gid])
 
     def merge(self, annotation: "Annotation") -> None:
         """Merges this annotation with the given."""
@@ -385,6 +390,11 @@ class Annotation:
                         fh.write("\n")
                     else:
                         fh.write(seq + "\n")
+
+    def in_sequence(self, name: str) -> Generator[Gene, None, None]:
+        """Yields genes in the sequence with given name."""
+        for i in self._sequences[name]:
+            yield self._genes[i]
 
     def __iter__(self) -> Iterator[Gene]:
         return iter(list(self._genes.values()))

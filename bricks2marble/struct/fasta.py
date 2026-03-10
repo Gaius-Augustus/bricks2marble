@@ -154,6 +154,7 @@ class Sequence:
         self._sequence = sequence
         self._start = start
         self._end = end
+        self._evidence: np.ndarray | None = None
 
     @property
     def nuc(self) -> np.ndarray:
@@ -194,6 +195,23 @@ class Sequence:
             else:
                 self._end = self._sequence.size
             return self._end
+
+    @property
+    def evidence(self) -> np.ndarray | None:
+        """Evidence is an extra type of information per base position.
+        The given array has to have shape `(N, T, ...)`, matching the
+        first two dimensions of `self.nuc`.
+        """
+        return self._evidence
+
+    @evidence.setter
+    def evidence(self, array: np.ndarray | None) -> None:
+        if array is not None and self.nuc.shape != array.shape[:2]:
+            raise ValueError(
+                "Shape of given evidence does not match shape of sequence "
+                "representation."
+            )
+        self._evidence = array
 
     def complement(self, reverse: bool = False) -> "Sequence":
         """Returns a new sequence object which is the complementary
@@ -293,6 +311,12 @@ class Sequence:
             N = self.size // T
             self._end -= (self.size - N*T)
             self._sequence = self.flat[:N*T].reshape(N, T)
+            if self.evidence is not None:
+                if self.evidence is not None:
+                    self.evidence = np.reshape(
+                        self.evidence.flatten()[:self.size][:N*T],
+                        (N, T),
+                    )
             return self
         missing = (-self.size) % T
         N = (self.size + missing) // T
@@ -302,6 +326,11 @@ class Sequence:
         ))
         array = flattened.reshape(N, T)
         self._sequence = array
+        if self.evidence is not None:
+            self.evidence = np.reshape(np.r_[
+                self.evidence.flatten()[:self.size],
+                np.full(missing, -1, dtype=self.evidence.dtype),
+            ], (N, T))
         return self
 
     def positions(
@@ -340,6 +369,10 @@ class Sequence:
             start=start,  # type: ignore
             end=end,
         )
+        if self.evidence is not None:
+            seq.evidence = (self.evidence.flatten()[:self.size])[
+                np.newaxis, act_start:act_end,
+            ]
         return seq
 
     def occurences(
@@ -364,13 +397,17 @@ class Sequence:
             probs[token] += (self.nuc == index).sum() / size
         return probs
 
-    def string(self) -> str:
+    def string(self, repeats: bool = True) -> str:
         """Returns the string representation of this sequence as one
         long sequence of nucleotides.
+
+        Args:
+            repeats (bool, optional): Whether to write repeat-masked
+                positions as lower-case letters. Defaults to True.
         """
         translation_table = bytes.maketrans(
             bytes([0, 1, 2, 3, 4, 5, 6, 7, 8]),
-            b"ACGTNacgt",
+            b"ACGTNacgt" if repeats else b"ACGTNACGT",
         )
         translated = self.flat.tobytes().translate(translation_table)
         return translated.decode("utf-8")

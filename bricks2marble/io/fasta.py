@@ -115,6 +115,7 @@ def iterate_sequences(
     T_max: int | None = None,
     delta: float = 0.1,
     T_factors: list[int] | None = None,
+    group_size_limit: int | None = None,
     min_sequence_size: int | None = None,
     include: Container[str] | None = None,
     exclude: Container[str] | None = None,
@@ -145,6 +146,10 @@ def iterate_sequences(
             sequences in a group are smaller than `T_max`. A candidate
             needs to also be divisible by the given numbers. Defaults to
             no such conditions.
+        group_size_limit (int, optional): If specified, limits the
+            number of nucleotides in each group. Once the limit is
+            surpassed, a new group is started with the same chunk size.
+            Only supported for `T_max != None`. Defaults to no limit.
         min_sequence_size (int, optional): If specified, does not return
             sequences with a lower number of nucleotides. Defaults to
             returning all sequence lengths.
@@ -191,17 +196,26 @@ def iterate_sequences(
         T = T_max
         while i < len(idx):
 
+            gs = 0
+            group_overflow = False
             while i < len(idx) and (
                 idx[i][3] >= (delta * T)
                 or (T_factors is not None and idx[i][3] < min(T_factors))
             ):
                 if T_factors is None or idx[i][3] >= min(T_factors):
                     last_len = idx[i][3]
+                gs += idx[i][3]
                 i += 1
+                if group_size_limit is not None and gs > group_size_limit:
+                    group_overflow = True
+                    break
 
-            T_new = last_len if T_factors is None else (
-                largest_close_to_divisible_by(last_len, T_factors)
-            )
+            if group_overflow:
+                T_new = T
+            else:
+                T_new = last_len if T_factors is None else (
+                    largest_close_to_divisible_by(last_len, T_factors)
+                )
             if i > groups[-1]:
                 groups.append(i)
                 group_T.append(T)

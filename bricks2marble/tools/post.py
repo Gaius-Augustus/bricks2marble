@@ -55,17 +55,18 @@ def check_inframe_stop_codons(
     c = [nucleotides_to_kmers(fasta_from_string(i)[0].flat) for i in codons]
 
     txs = []
-    for gene in annotation:
-        seq = fasta[gene.seqname].flat
-        for tx in gene:
-            if tx.cds_length() < 6: continue
-            s = np.r_[
-                *(seq[cds[0]:cds[1]] for cds in tx.coords(FeatureType.CDS))
-            ]
-            if tx.strand == "-": s = complement(s, reverse=True)
-            s3 = nucleotides_to_kmers(s)[:-1]
+    for sequence in fasta:
+        seq = sequence.flat
+        for gene in annotation.in_sequence(sequence.name):
+            for tx in gene:
+                if tx.cds_length() < 6: continue
+                s = np.r_[
+                    *(seq[cds[0]:cds[1]] for cds in tx.coords(FeatureType.CDS))
+                ]
+                if tx.strand == "-": s = complement(s, reverse=True)
+                s3 = nucleotides_to_kmers(s)[:-1]
 
-            if np.any(np.isin(s3, c)): txs.append(tx)
+                if np.any(np.isin(s3, c)): txs.append(tx)
 
     if remove:
         for tx in txs: annotation.remove(tx)

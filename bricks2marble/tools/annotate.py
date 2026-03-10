@@ -195,6 +195,7 @@ def _annotate(
     exon_at_boundary: int | None = None,
     model_name: str = "Model",
     first_tx_id: int = 0,
+    concat_strand_to_reprediction: bool = False,
 ) -> tuple[Annotation, int]:
     log_it(f"Start initial prediction of {fasta.N} chunks.")
     labels_fwd, labels_bwd = predict_func(fasta)
@@ -204,7 +205,7 @@ def _annotate(
     repred_index = []
     repred_strand = []
     repred_sequence = []
-    repred_t = int(2 * fasta.T * reprediction_factor)
+    repred_t = int(fasta.T * reprediction_factor)
     total_mis_fwd = 0
     total_mis_bwd = 0
     total_mis_both = 0
@@ -242,13 +243,18 @@ def _annotate(
             np.ones(len(mis_both), dtype=np.int32)+1,
         ])
         if mis.size > 0:
-            repred_seqs.append(Sequence(
-                np.concatenate(
-                    (fasta.nuc[mis, -repred_t:], fasta.nuc[mis+1, :repred_t]),
-                    axis=-1,
-                ),
-                name=seq.name,
-            ))
+            cseq = Sequence(np.concatenate(
+                (fasta.nuc[mis, -repred_t:], fasta.nuc[mis+1, :repred_t]),
+                axis=-1,
+            ), name=seq.name)
+            if concat_strand_to_reprediction:
+                strands = np.r_[
+                    np.zeros((len(mis_fwd), 2*repred_t), dtype=np.uint8),
+                    np.ones((len(mis_bwd), 2*repred_t), dtype=np.uint8),
+                    np.ones((len(mis_both), 2*repred_t), dtype=np.uint8)+1,
+                ]
+                cseq.evidence = strands
+            repred_seqs.append(cseq)
         shift += seq.N
 
     total = total_mis_fwd + total_mis_bwd + total_mis_both
@@ -375,6 +381,7 @@ def _annotate_genome(
     T_max: int = 500_000,
     T_delta: float = 0.1,
     T_factors: list[int] | None = None,
+    group_size_limit: int | None = 1_000_000_000,
     model_name: str = "bricks2marble",
     min_sequence_size: int | None = 1_000,
     include_seqs: Container[str] | None = None,
@@ -387,6 +394,7 @@ def _annotate_genome(
     ] | None = None,
     reprediction_factor: float = 0.5,
     repredict_exon_at_boundary: int | None = None,
+    concat_strand_to_reprediction: bool = False,
     postprocess: Callable[[Fasta, Annotation], Annotation] | None = None,
 ) -> None:
     wrapper = textwrap.TextWrapper(
@@ -403,6 +411,7 @@ def _annotate_genome(
         T_max=T_max,
         delta=T_delta,
         T_factors=T_factors,
+        group_size_limit=group_size_limit,
         min_sequence_size=min_sequence_size,
         include=include_seqs,
         exclude=exclude_seqs,
@@ -421,6 +430,7 @@ def _annotate_genome(
             predict_func=predict_func,
             repredict_func=repredict_func,
             reprediction_factor=reprediction_factor,
+            concat_strand_to_reprediction=concat_strand_to_reprediction,
             model_name=model_name,
             exon_at_boundary=repredict_exon_at_boundary,
             first_tx_id=first_tx_id,
@@ -447,6 +457,7 @@ def annotate_genome(
     T_max: int = 500_000,
     T_delta: float = 0.1,
     T_factors: list[int] | None = None,
+    group_size_limit: int | None = 1_000_000_000,
     model_name: str = "bricks2marble",
     min_sequence_size: int | None = 1_000,
     include_seqs: Container[str] | None = None,
@@ -459,6 +470,7 @@ def annotate_genome(
     ] | None = None,
     reprediction_factor: float = 0.5,
     repredict_exon_at_boundary: int | None = None,
+    concat_strand_to_reprediction: bool = False,
     postprocess: Callable[[Fasta, Annotation], Annotation] | None = None,
 ) -> None:
     """Generate a genome annotation of a given fasta file.
@@ -500,6 +512,10 @@ def annotate_genome(
             sequences in a group are smaller than `T_max`. A candidate
             needs to also be divisible by the given numbers. Defaults to
             no such conditions.
+        group_size_limit (int, optional): If specified, limits the
+            number of nucleotides in each group. Once the limit is
+            surpassed, a new group is started with the same chunk size.
+            Defaults to 1_000_000_000.
         model_name (str, optional): Name of the model that is used, or
             any other identifier. This will be listed as the 'source' in
             the gtf. Defaults to "bricks2marble".
@@ -531,6 +547,12 @@ def annotate_genome(
             break point, a reprediction will be made. This works only if
             ``liberal=True``. Here, ``k`` is the given number for this
             argument. Defaults to no additional checks for exons.
+        concat_strand_to_reprediction (bool, optional): If True, appends
+            a numpy array of integers `{0, 1, 2}` as a `Fasta.evidence`
+            entry to the sequences that are given to the reprediction
+            function. A `0` means that this sequence is for the forward
+            strand, `1` for the backward strand and `2` for both.
+            Defaults to False.
         postprocess (callable, optional): An optional function that
             changes each annotation before writing it to the gtf file.
             Useful for cleaning up errors from the prediction. The
@@ -571,6 +593,7 @@ def annotate_genome(
             T_max=T_max,
             T_delta=T_delta,
             T_factors=T_factors,
+            group_size_limit=group_size_limit,
             model_name=model_name,
             min_sequence_size=min_sequence_size,
             include_seqs=include_seqs,
@@ -579,6 +602,7 @@ def annotate_genome(
             repredict_func=repredict_func,
             reprediction_factor=reprediction_factor,
             repredict_exon_at_boundary=repredict_exon_at_boundary,
+            concat_strand_to_reprediction=concat_strand_to_reprediction,
             postprocess=postprocess,
         )
 
