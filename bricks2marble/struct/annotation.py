@@ -392,8 +392,11 @@ class Annotation:
                         fh.write(seq + "\n")
 
     def in_sequence(self, name: str) -> Generator[Gene, None, None]:
-        """Yields genes in the sequence with given name."""
-        for i in self._sequences[name]:
+        """Yields genes in the sequence with given name. If the sequence
+        name does not exist, this yields no genes, but also does not
+        raise an Error.
+        """
+        for i in (self._sequences[name] if name in self._sequences else []):
             yield self._genes[i]
 
     def __iter__(self) -> Iterator[Gene]:
