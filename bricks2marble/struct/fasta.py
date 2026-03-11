@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from typing import Callable, Literal, overload
 
 import numpy as np
@@ -465,9 +466,17 @@ class Fasta:
     @property
     def nuc(self) -> np.ndarray:
         """Sequences of encoded nucleotides of shape ``(N, T)``."""
-        return np.concatenate(
-            [self._sequences[k].nuc for k in range(len(self._sequences))],
-        )
+        return np.concatenate([seq.nuc for seq in self])
+
+    @property
+    def evidence(self) -> np.ndarray | None:
+        """Evidence of all sequences concatenated as an array of shape
+        ``(N, T, ...)``. If one sequence does not contain evidence, the
+        returned value is also None.
+        """
+        for seq in self:
+            if seq.evidence is None: return None
+        return np.concatenate([seq.evidence for seq in self])  # type: ignore
 
     @property
     def size(self) -> int:
@@ -477,8 +486,7 @@ class Fasta:
     def segments(self) -> list[Segment]:
         """Sequences of segments of length ``N``."""
         segs = []
-        for k in range(len(self._sequences)):
-            segs.extend(self._sequences[k].segments())
+        for seq in self: segs.extend(seq.segments())
         return segs
 
     @property
@@ -607,6 +615,9 @@ class Fasta:
             if seq.name == key:
                 return seq
         raise KeyError(f"Sequence with name {key!r} does not exist.")
+
+    def __iter__(self) -> Iterator[Sequence]:
+        return iter(self._sequences)
 
     def __len__(self) -> int:
         return len(self._sequences)
