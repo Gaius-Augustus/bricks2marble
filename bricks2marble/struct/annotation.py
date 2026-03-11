@@ -134,10 +134,10 @@ class Annotation:
         gene_id = entry.attribute("gene_id")
         if gene_id not in self._genes:
             self._genes[gene_id] = Gene(gene_id)
+            if entry.name not in self._sequences:
+                self._sequences[entry.name] = []
+            self._sequences[entry.name].append(gene_id)
         self._genes[gene_id].add(entry)
-        if entry.name not in self._sequences:
-            self._sequences[entry.name] = []
-        self._sequences[entry.name].append(gene_id)
 
     def rename(self, name: str | Callable[[str], str]) -> None:
         """Changes the names of all sequences in this annotation.
