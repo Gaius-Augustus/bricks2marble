@@ -454,15 +454,15 @@ def annotate_genome(
     output: Path | str,
     log_file: Path | str | None = None,
     allow_extract_gz: bool = False,
+    model_name: str = "bricks2marble",
     T_max: int = 500_000,
     T_delta: float = 0.1,
     T_factors: list[int] | None = None,
     group_size_limit: int | None = 1_000_000_000,
-    model_name: str = "bricks2marble",
     min_sequence_size: int | None = 1_000,
+    split_seqnames: bool = True,
     include_seqs: Container[str] | None = None,
     exclude_seqs: Container[str] | None = None,
-    split_seqnames: bool = True,
     repredict_func: Callable[[Fasta],
         tuple[np.ndarray, np.ndarray | None]
         | tuple[np.ndarray | None, np.ndarray]
@@ -472,6 +472,7 @@ def annotate_genome(
     repredict_exon_at_boundary: int | None = None,
     concat_strand_to_reprediction: bool = False,
     postprocess: Callable[[Fasta, Annotation], Annotation] | None = None,
+    log_config: list[str] | None = None,
 ) -> None:
     """Generate a genome annotation of a given fasta file.
 
@@ -499,6 +500,9 @@ def annotate_genome(
             the same location with a random name. This ensures that the
             same `.gz` file can be annotated multiple times at once, for
             example in a cluster. Defaults to False.
+        model_name (str, optional): Name of the model that is used, or
+            any other identifier. This will be listed as the 'source' in
+            the gtf. Defaults to "bricks2marble".
         T_max (int, optional): Size of chunks in the Fasta given to
             `predict_func`. If all sequences in a group are smaller than
             `T_max`, the chunk size for that group is determined by the
@@ -516,12 +520,11 @@ def annotate_genome(
             number of nucleotides in each group. Once the limit is
             surpassed, a new group is started with the same chunk size.
             Defaults to 1_000_000_000.
-        model_name (str, optional): Name of the model that is used, or
-            any other identifier. This will be listed as the 'source' in
-            the gtf. Defaults to "bricks2marble".
         min_sequence_size (int, optional): If specified, does not return
             sequences with a lower number of nucleotides. Defaults to
-            returning all sequence lengths.
+            1000.
+        split_seqnames (bool, optional): If True, shortens all sequence
+            names by cutting at the first whitespace. Defaults to True.
         include_seqs (Container[str], optional): Container of sequence
             names to include in the annotation. The sequence names are
             expected to be also split at the first whitespace, if
@@ -532,8 +535,6 @@ def annotate_genome(
             `split_seqnames` is True. If a name is in `include_seqs` and
             `exclude_seqs`, it will be excluded. Defaults to no excluded
             sequences.
-        split_seqnames (bool, optional): If True, shortens all sequence
-            names by cutting at the first whitespace. Defaults to True.
         repredict_func (Callable, optional): A function of the same
             nature as `predict_func`, but used for the second stage of
             predictions that solves mismatches of the first. The default
@@ -559,6 +560,9 @@ def annotate_genome(
             function takes a :class:`Fasta` and an :class:`Annotation`
             object as arguments and returns an :class:`Annotation`
             object.
+        log_config (list[str], optional): A list of strings to
+            write to the `log_file` as additional information at the
+            start of the annotation. Defaults to None.
     """
     fasta = Path(fasta)
     output = Path(output)
@@ -571,19 +575,30 @@ def annotate_genome(
     setup_logging(log_file)
 
     log_it(
-        f"{'':-^99}\n|{f'{model_name} genome annotation': ^97}|\n{'':-^99}\n"
-            f"> target genome file: {fasta}\n"
-            f"> output annotation file: {output}\n"
-            f"> maximal chunk length: {T_max}\n"
-            f"> forced divisors of the chunk length: {T_factors}\n"
-            f"> reprediction factor: {reprediction_factor}\n"
-            f"> repredict exons near boundaries: {(
-                'None' if repredict_exon_at_boundary is None else
-                repredict_exon_at_boundary
-            )}\n"
-            f"> postprocessing: {postprocess is not None}\n",
+        f"{'':-^99}\n|{f'{model_name} genome annotation': ^97}|\n{'':-^99}\n",
         extra={"timer": False},
     )
+    config_log = [f"target genome file: {fasta}"]
+    if include_seqs is not None:
+        config_log += [f"include sequences: {include_seqs}"]
+    if exclude_seqs is not None:
+        config_log += [f"exclude sequences: {exclude_seqs}"]
+    config_log += [
+        f"output annotation file: {output}",
+        f"maximal chunk length: {T_max}",
+        f"forced divisors of the chunk length: {T_factors}",
+        f"minimal sequence size: {min_sequence_size}",
+        f"group size limit: {group_size_limit}",
+        f"reprediction factor: {reprediction_factor}",
+        f"repredict exons near boundaries: {(
+            'None' if repredict_exon_at_boundary is None else
+            repredict_exon_at_boundary
+        )}",
+        f"postprocessing: {postprocess is not None}",
+    ]
+    if log_config is not None:
+        config_log += log_config
+    log_it("> " + "\n> ".join(config_log) + "\n", extra={"timer": False})
 
     def _call_annotate(fasta_file: Path | str):
         _annotate_genome(
