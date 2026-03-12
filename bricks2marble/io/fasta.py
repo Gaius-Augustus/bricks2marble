@@ -64,6 +64,7 @@ def write_fasta(
     fasta: Fasta,
     path: Path| str,
     line_length: int = 80,
+    as_gz: bool = False,
 ) -> None:
     path = Path(path)
     if path.is_file() and path.exists():
@@ -78,7 +79,8 @@ def write_fasta(
         bytes([0, 1, 2, 3, 4, 5, 6, 7, 8]),
         b"ACGTNacgt",
     )
-    with open(path, "w") as f:
+    open_func = gzip.open if as_gz else open
+    with open_func(path, "wt") as f:
         for sequence in fasta:
             f.write(f">{sequence.name}\n")
             translated = sequence.flat.tobytes().translate(translation_table)
@@ -117,6 +119,7 @@ def iterate_sequences(
     T_factors: list[int] | None = None,
     group_size_limit: int | None = None,
     min_sequence_size: int | None = None,
+    sort_reverse: bool | None = None,
     include: Container[str] | None = None,
     exclude: Container[str] | None = None,
     split_name: bool = True,
@@ -153,6 +156,10 @@ def iterate_sequences(
         min_sequence_size (int, optional): If specified, does not return
             sequences with a lower number of nucleotides. Defaults to
             returning all sequence lengths.
+        sort_reverse (bool, optional): Whether to sort sequences in
+            descending order (True) or ascending order (False). Defaults
+            to not sorting sequences if `T_max` is not specified, else
+            `True`.
         include (Container[str], optional): Container of sequence names
             to include. The sequence names are expected to be also split
             at the first whitespace, if `split_name` is True. Defaults
@@ -171,7 +178,7 @@ def iterate_sequences(
     fasta = Path(fasta)
     idx = index(
         fasta,
-        sort_reverse=True if T_max is not None else None,
+        sort_reverse=True if T_max is not None else sort_reverse,
         min_sequence_size=min_sequence_size,
         include=include,
         exclude=exclude,
