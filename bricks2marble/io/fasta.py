@@ -197,6 +197,7 @@ def iterate_sequences(
     if T_max is None:
         groups = list(range(len(idx)+1))
     else:
+        smallest_T = np.prod(T_factors) if T_factors is not None else 1
         groups = [0]
         group_T = [T_max]
         i = 0
@@ -207,9 +208,9 @@ def iterate_sequences(
             group_overflow = False
             while i < len(idx) and (
                 idx[i][3] >= (delta * T)
-                or (T_factors is not None and idx[i][3] < min(T_factors))
+                or (T_factors is not None and idx[i][3] < smallest_T)
             ):
-                if T_factors is None or idx[i][3] >= min(T_factors):
+                if T_factors is None or idx[i][3] >= smallest_T:
                     last_len = idx[i][3]
                 gs += idx[i][3]
                 i += 1
