@@ -210,19 +210,17 @@ def iterate_sequences(
                 idx[i][3] >= (delta * T)
                 or (T_factors is not None and idx[i][3] < smallest_T)
             ):
-                if T_factors is None or idx[i][3] >= smallest_T:
-                    last_len = idx[i][3]
                 gs += idx[i][3]
                 i += 1
                 if group_size_limit is not None and gs > group_size_limit:
                     group_overflow = True
                     break
 
-            if group_overflow:
+            if group_overflow or i == len(idx):
                 T_new = T
             else:
-                T_new = last_len if T_factors is None else (
-                    largest_close_to_divisible_by(last_len, T_factors)
+                T_new = idx[i][3] if T_factors is None else (
+                    largest_close_to_divisible_by(idx[i][3], T_factors)
                 )
             if i > groups[-1]:
                 groups.append(i)
