@@ -1,13 +1,14 @@
 import csv
+import textwrap
 from collections import OrderedDict
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Literal
 
 from .transcript import FeatureType, GTFEntry, Transcript
 
 if TYPE_CHECKING:
-    from .fasta import FASTA
+    from .fasta import Fasta
 
 
 class Gene:
@@ -81,25 +82,6 @@ class Gene:
         for k in self._transcripts:
             self._transcripts[k].finalize()
 
-    def clean(self, min_cds_length: int | None = None) -> None:
-        """Removes any transcripts that do not meet the given
-        requirements.
-
-        Args:
-            min_cds_length (int, optional): Minimal length of coding
-                regions. All transcripts with a shorter coding region
-                will be deleted. Defaults to no checks for length.
-        """
-        drop_tx = []
-        for k in self._transcripts:
-            if (
-                min_cds_length is not None
-                and self._transcripts[k].cds_length() < min_cds_length
-            ):
-                drop_tx.append(k)
-        for k in drop_tx:
-            self._transcripts.pop(k)
-
     def to_list(self) -> list[GTFEntry]:
         if len(self._transcripts) == 0:
             return []
@@ -136,7 +118,7 @@ class Annotation:
 
     def __init__(self) -> None:
         self._genes: OrderedDict[str, Gene] = OrderedDict()
-        self._iter_index = -1
+        self._sequences: dict[str, list[str]] = OrderedDict()
 
     def add(self, entry: GTFEntry) -> None:
         """Adds the given gtf entry to the gene.
@@ -152,6 +134,9 @@ class Annotation:
         gene_id = entry.attribute("gene_id")
         if gene_id not in self._genes:
             self._genes[gene_id] = Gene(gene_id)
+            if entry.name not in self._sequences:
+                self._sequences[entry.name] = []
+            self._sequences[entry.name].append(gene_id)
         self._genes[gene_id].add(entry)
 
     def rename(self, name: str | Callable[[str], str]) -> None:
@@ -171,68 +156,63 @@ class Annotation:
         for gene in self:
             gene.finalize()
 
+    def remove(self, obj: Transcript | Gene) -> None:
+        """Remove the given transcript or gene from the annotation.
+        Raises an error if it does not exist.
+        """
+        if isinstance(obj, Gene):
+            self._genes.pop(obj.id)
+            self._sequences[obj.seqname].remove(obj.id)
+        elif isinstance(obj, Transcript):
+            self._genes[obj.gene_id]._transcripts.pop(obj.id)
+
     def clean(
         self,
-        min_cds_length: int | None = None,
-        fasta: "FASTA | None" = None,
-        boundaries: bool = False,
-        start_codons: list[str] | bool = True,
-        stop_codons: list[str] | bool = True,
-        intron_begin: list[str] | bool = True,
-        intron_end: list[str] | bool = True,
-        no_repeats: bool = False,
+        fasta: "Fasta",
+        inframe_stop_codons: bool = True,
+        min_coding_length: int | None = None,
+        exon_boundaries: bool = False,
+        coding_repeats: bool = False,
+        out_of_bounds: bool = False,
     ) -> None:
         """Removes any transcripts that do not meet the given
-        requirements.
+        requirements. For fine-grained options, have a look at the
+        corresponding functions in `bricks2marble.tools.post`.
 
         Args:
-            min_cds_length (int, optional): Minimal length of coding
+            fasta (Fasta): A fasta is required to be specified for all
+                subsequent arguments.
+            inframe_stop_codons (list[str], optional): Removes all
+                transcripts with inframe stop codons from the
+                annotation. Defaults to True.
+            min_coding_length (int, optional): Minimal length of coding
                 regions. All transcripts with a shorter coding region
                 will be deleted. Defaults to no checks for length.
-            fasta (FASTA, optional): If a FASTA is given, all
-                transcripts are removed that do not start or end at
-                specific start-/stop-codons. Also removes any
-                out-of-bounds transcripts.
-            start_codons (list[str], optional): A list of strings of
-                possible start codons or a boolean value. If true,
-                defaults to only "ATG" and if false, does no checks for
-                start codons.
-            stop_codons (list[str], optional): A list of strings of
-                possible stop codons or a boolean value. If true,
-                defaults to "TAG", "TAA" or "TGA" and if false, does no
-                checks for stop codons.
-            intron_begin (list[str], optional): A list of strings of
-                possible begin patterns of introns, or a boolean value.
-                If true, defaults to only "GT" and if false, does no
-                checks for begin patterns.
-            intron_end (list[str], optional): A list of strings of
-                possible end patterns of introns, or a boolean value. If
-                true, defaults to only "AG" and if false, does no checks
-                for end patterns.
+            exon_boundaries (bool, optional): Removes transcripts with
+                wrong exon boundaries from the annotation. Is based on
+                the default border codons. Defaults to no action.
+            coding_repeats (bool, optional): Removes transcripts that
+                have coding regions that overlap with repeats. Defaults
+                to no action.
+            out_of_bounds (bool, optional): Removes transcripts that are
+                out-of-bounds for the given fasta. Defaults to no
+                action.
         """
-        if boundaries:
-            if fasta is None:
-                raise ValueError(
-                    "If boundaries is True, a FASTA object has to be given."
-                )
-            from ..tools.post import check_annotation_boundaries
-            check_annotation_boundaries(
-                self, fasta,
-                start_codons=start_codons,
-                stop_codons=stop_codons,
-                intron_begin=intron_begin,
-                intron_end=intron_end,
-                remove=True,
-            )
-        if no_repeats:
-            if fasta is None:
-                raise ValueError(
-                    "If no_repeats is True, a FASTA object has to be given."
-                )
-            from ..tools.post import check_repeat_masked
-            check_repeat_masked(self, fasta, remove=True)
-        for gene in self:
-            gene.clean(min_cds_length=min_cds_length)
+        if inframe_stop_codons:
+            from ..tools.post import check_inframe_stop_codons
+            check_inframe_stop_codons(self, fasta, remove=True)
+        if min_coding_length is not None:
+            from ..tools.post import check_min_coding_length
+            check_min_coding_length(self, min_coding_length, remove=True)
+        if exon_boundaries:
+            from ..tools.post import check_exon_boundaries
+            check_exon_boundaries(self, fasta, remove=True)
+        if coding_repeats:
+            from ..tools.post import check_coding_repeats
+            check_coding_repeats(self, fasta, remove=True)
+        if out_of_bounds:
+            from ..tools.post import check_out_of_bounds
+            check_out_of_bounds(self, fasta, remove=True)
 
     def at(
         self,
@@ -282,7 +262,7 @@ class Annotation:
                 if self._genes[gid].seqname != sequence:
                     drop_keys.append(gid)
             for gid in drop_keys:
-                self._genes.pop(gid)
+                self.remove(self._genes[gid])
 
         if start is not None:
             drop_keys = []
@@ -290,7 +270,7 @@ class Annotation:
                 if self._genes[gid].start < start:
                     drop_keys.append(gid)
             for gid in drop_keys:
-                self._genes.pop(gid)
+                self.remove(self._genes[gid])
 
         if end is not None:
             drop_keys = []
@@ -298,7 +278,7 @@ class Annotation:
                 if self._genes[gid].end >= end:
                     drop_keys.append(gid)
             for gid in drop_keys:
-                self._genes.pop(gid)
+                self.remove(self._genes[gid])
 
     def merge(self, annotation: "Annotation") -> None:
         """Merges this annotation with the given."""
@@ -328,13 +308,21 @@ class Annotation:
             gtf.extend(gene.to_list())
         return gtf
 
-    def to_gtf(self, path: Path | str) -> None:
+    def to_gtf(
+        self,
+        path: Path | str,
+        mode: Literal["w", "a", "x"] = "w",
+    ) -> None:
         """Write the annotation in gtf format to the given path.
 
         Args:
             path (str): Path to the output file, ends with ".gtf".
+            mode (str): Mode in which to open the file. Possible choices
+                are "w", "a" or "x". Defaults to "w".
         """
-        with open(path, 'w+') as file:
+        path = Path(path)
+
+        with open(path, mode) as file:
             out_writer = csv.writer(
                 file,
                 delimiter='\t',
@@ -343,6 +331,73 @@ class Annotation:
             )
             for line in self.to_list():
                 out_writer.writerow(line.to_list())
+
+    def extract_to_file(
+        self,
+        target: Literal["coding", "protein"],
+        fasta: "Fasta",
+        path: Path | str,
+        mode: Literal["w", "a", "x"] = "w",
+        line_width: int = 60,
+        header_fn: Callable[[Gene, Transcript], str] | None = None,
+        skip_empty: bool = True
+    ) -> None:
+        """Combine Annotation and Fasta data to write a target sequence
+        to a given file.
+
+        Args:
+            target (str): Can be either "coding" or "protein".
+            fasta (Fasta): Genome Fasta used to extract coding
+                sequences.
+            path (Path | str): Output Fasta path.
+            mode (Literal["w","a","x"], optional): File open mode.
+                Defaults to "w".
+            line_width (int, optional): Wrap sequence to this line width
+                (Fasta style). Defaults to 60.
+            header_fn (callable, optional): Custom header builder. If
+                None, uses:
+                "{gene_id}|{tx_id}|{seqname}:{start}-{end}({strand})".
+            skip_empty (bool, optional): If True, skips empty coding
+                sequences. Defaults to True.
+        """
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        def default_header(g: Gene, tx: Transcript) -> str:
+            return (
+                f"{g.id}|{tx.id}|{g.seqname}:{tx.start}-{tx.end}({g.strand})"
+            )
+        mk_header = header_fn or default_header
+
+        with open(path, mode) as fh:
+            for gene in self:
+                sequence = fasta[gene.seqname]
+                for tx in gene:
+                    if target == "coding":
+                        seq = tx.coding_sequence(sequence).string()
+                    elif target == "protein":
+                        seq = tx.protein_sequence(sequence)
+
+                    if skip_empty and (seq is None or len(seq) == 0):
+                        continue
+
+                    header = mk_header(gene, tx)
+                    fh.write(f">{header}\n")
+                    if line_width and line_width > 0:
+                        fh.write(
+                            "\n".join(textwrap.wrap(seq, width=line_width))
+                        )
+                        fh.write("\n")
+                    else:
+                        fh.write(seq + "\n")
+
+    def in_sequence(self, name: str) -> Generator[Gene, None, None]:
+        """Yields genes in the sequence with given name. If the sequence
+        name does not exist, this yields no genes, but also does not
+        raise an Error.
+        """
+        for i in (self._sequences[name] if name in self._sequences else []):
+            yield self._genes[i]
 
     def __iter__(self) -> Iterator[Gene]:
         return iter(list(self._genes.values()))

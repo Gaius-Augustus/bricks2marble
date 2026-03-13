@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from typing import Callable, Literal, overload
 
 import numpy as np
@@ -110,6 +111,21 @@ def one_hot(
     return encoded
 
 
+def nucleotides_to_kmers(nuc: np.ndarray, k: int = 3) -> np.ndarray:
+    nuc[nuc > 4] = nuc[nuc > 4] - 5
+    nuc = np.asarray(nuc, dtype=np.uint16)
+    nuc = nuc[:nuc.size//k*k].reshape(-1, k)
+    shifts = 3 * np.arange(k-1, -1, -1, dtype=np.uint16)
+    return np.bitwise_or.reduce(nuc << shifts, axis=1)
+
+
+def complement(nuc: np.ndarray, reverse: bool = False) -> np.ndarray:
+    if reverse: nuc = nuc[..., ::-1]
+    nuc[nuc < 4] = 3 - nuc[nuc < 4]
+    nuc[nuc > 4] = 13 - nuc[nuc > 4]
+    return nuc
+
+
 class Sequence:
     """Class representing a single nucleotide sequence or a continuous
     subsequence of it. Each :class:`Sequence` has the name of its origin
@@ -125,7 +141,7 @@ class Sequence:
         sequences (list[Sequence]): An array of shape ``(N, T)`` which
             holds encoded nucleotides, where ``N`` is the number of
             sequences of length ``T``. This array is later accessed by
-            ``FASTA.nuc``.
+            ``Fasta.nuc``.
     """
 
     def __init__(
@@ -139,6 +155,7 @@ class Sequence:
         self._sequence = sequence
         self._start = start
         self._end = end
+        self._evidence: np.ndarray | None = None
 
     @property
     def nuc(self) -> np.ndarray:
@@ -147,6 +164,10 @@ class Sequence:
     @property
     def flat(self) -> np.ndarray:
         return self._sequence.flatten()[:self.size]
+
+    @property
+    def codons(self) -> np.ndarray:
+        return nucleotides_to_kmers(self.flat)
 
     @property
     def size(self) -> int:
@@ -176,15 +197,37 @@ class Sequence:
                 self._end = self._sequence.size
             return self._end
 
-    def complement(self) -> "Sequence":
-        """Returns a new sequence object which is the complementary
-        strand to the current sequence. This will not reverse the order
-        of nucleotides.
+    @property
+    def evidence(self) -> np.ndarray | None:
+        """Evidence is an extra type of information per base position.
+        The given array has to have shape `(N, T, ...)`, matching the
+        first two dimensions of `self.nuc`.
         """
-        seq = self._sequence.copy()
-        seq[seq < 4] = 3 - seq[seq < 4]
-        seq[seq > 4] = 13 - seq[seq > 4]
-        return Sequence(seq, name=self.name, start=self.start, end=self.end)
+        return self._evidence
+
+    @evidence.setter
+    def evidence(self, array: np.ndarray | None) -> None:
+        if array is not None and self.nuc.shape != array.shape[:2]:
+            raise ValueError(
+                "Shape of given evidence does not match shape of sequence "
+                "representation."
+            )
+        self._evidence = array
+
+    def complement(self, reverse: bool = False) -> "Sequence":
+        """Returns a new sequence object which is the complementary
+        strand to the current sequence. This will not reverse the
+        sequence direction unless specified.
+
+        Args:
+            reverse (bool, optional): Also reverses the sequence
+                direction. For this, the sequence needs to be resampled
+                to one chunk only. Defaults to False.
+        """
+        s = self.copy()
+        if reverse: s.resample()
+        s._sequence = complement(s._sequence, reverse=reverse)
+        return s
 
     def is_repeat_masked(self) -> bool:
         """Checks if the sequence has any repeat-masked positions and
@@ -213,7 +256,7 @@ class Sequence:
     def one_hot(
         self,
         pad_index: int = 4,
-        repeats: Literal["track", "expand", "omit"] = "track",
+        repeats: Literal["track", "expand" , "omit"] = "track",
         N: Literal["track", "uniform"] = "track",
         dtype: type = np.float32,
     ) -> np.ndarray:
@@ -269,6 +312,12 @@ class Sequence:
             N = self.size // T
             self._end -= (self.size - N*T)
             self._sequence = self.flat[:N*T].reshape(N, T)
+            if self.evidence is not None:
+                if self.evidence is not None:
+                    self.evidence = np.reshape(
+                        self.evidence.flatten()[:self.size][:N*T],
+                        (N, T),
+                    )
             return self
         missing = (-self.size) % T
         N = (self.size + missing) // T
@@ -278,6 +327,11 @@ class Sequence:
         ))
         array = flattened.reshape(N, T)
         self._sequence = array
+        if self.evidence is not None:
+            self.evidence = np.reshape(np.r_[
+                self.evidence.flatten()[:self.size],
+                np.full(missing, -1, dtype=self.evidence.dtype),
+            ], (N, T))
         return self
 
     def positions(
@@ -287,11 +341,14 @@ class Sequence:
         /,
     ) -> "Sequence":
         """Returns a :class:`Sequence` object that only includes
-        nucleotides from the specified range.
+        nucleotides from the specified range. The sequence is resampled
+        to one chunk only.
 
         Args:
-            start (int, optional): First index of the specified range.
-            end (int, optional): Last index of the specified range.
+            start (int, optional): First index of the specified range,
+                starting at 0.
+            end (int, optional): Last index of the specified range,
+                itself excluded.
         """
         if end is None:
             if start is None:
@@ -313,7 +370,11 @@ class Sequence:
             start=start,  # type: ignore
             end=end,
         )
-        return seq#.resample(self.T)
+        if self.evidence is not None:
+            seq.evidence = (self.evidence.flatten()[:self.size])[
+                np.newaxis, act_start:act_end,
+            ]
+        return seq
 
     def occurences(
         self,
@@ -337,20 +398,37 @@ class Sequence:
             probs[token] += (self.nuc == index).sum() / size
         return probs
 
-    def string(self) -> str:
+    def string(self, repeats: bool = True) -> str:
         """Returns the string representation of this sequence as one
         long sequence of nucleotides.
+
+        Args:
+            repeats (bool, optional): Whether to write repeat-masked
+                positions as lower-case letters. Defaults to True.
         """
         translation_table = bytes.maketrans(
             bytes([0, 1, 2, 3, 4, 5, 6, 7, 8]),
-            b"ACGTNacgt",
+            b"ACGTNacgt" if repeats else b"ACGTNACGT",
         )
         translated = self.flat.tobytes().translate(translation_table)
         return translated.decode("utf-8")
 
+    def join(self, sequence: "Sequence") -> "Sequence":
+        """Returns a new sequence that is the concatenation of the
+        current and given sequence. The name will be the same as the
+        current sequence. The start and end indices of the new sequence
+        are set to the default values and might not correspond to the
+        indices of the split sequences. The new sequence is resampled to
+        the total length.
+        """
+        return Sequence(
+            np.r_[self.flat, sequence.flat][np.newaxis, :],
+            name=self.name,
+        )
+
     def copy(self) -> "Sequence":
         return Sequence(
-            self._sequence,
+            self._sequence.copy(),
             name=self.name,
             start=self.start,
             end=self.end,
@@ -363,7 +441,7 @@ class Sequence:
         return f"Sequence({self.name!r}, {self.start}, {self.end})"
 
 
-class FASTA:
+class Fasta:
     """This class manages a sequence of nucleotides that is grouped into
     chunks of a given length with additional information about their
     origin (sequence name and range).
@@ -380,7 +458,7 @@ class FASTA:
         self._sequences = sequences
 
     def is_repeat_masked(self) -> bool:
-        """Checks if the FASTA has any repeat-masked positions and
+        """Checks if the Fasta has any repeat-masked positions and
         returns a corresponding boolean.
         """
         return any(seq.is_repeat_masked() for seq in self)
@@ -388,9 +466,17 @@ class FASTA:
     @property
     def nuc(self) -> np.ndarray:
         """Sequences of encoded nucleotides of shape ``(N, T)``."""
-        return np.concatenate(
-            [self._sequences[k].nuc for k in range(len(self._sequences))],
-        )
+        return np.concatenate([seq.nuc for seq in self])
+
+    @property
+    def evidence(self) -> np.ndarray | None:
+        """Evidence of all sequences concatenated as an array of shape
+        ``(N, T, ...)``. If one sequence does not contain evidence, the
+        returned value is also None.
+        """
+        for seq in self:
+            if seq.evidence is None: return None
+        return np.concatenate([seq.evidence for seq in self])  # type: ignore
 
     @property
     def size(self) -> int:
@@ -400,8 +486,7 @@ class FASTA:
     def segments(self) -> list[Segment]:
         """Sequences of segments of length ``N``."""
         segs = []
-        for k in range(len(self._sequences)):
-            segs.extend(self._sequences[k].segments())
+        for seq in self: segs.extend(seq.segments())
         return segs
 
     @property
@@ -412,11 +497,22 @@ class FASTA:
     def T(self) -> int:
         return self.nuc.shape[1]
 
-    def resample(self, T: int, drop_remainder: bool = False) -> "FASTA":
-        """Resamples the :class:`FASTA` object such that each sequence
+    def complement(self, reverse: bool = False) -> "Fasta":
+        """Returns a new fasta with all sequences being complemented.
+        This will not reverse the sequence direction unless specified.
+
+        Args:
+            reverse (bool, optional): Also reverses the sequence
+                direction. For this, all sequences need to be resampled
+                to one chunk only. Defaults to False.
+        """
+        return Fasta([s.complement(reverse=reverse) for s in self])
+
+    def resample(self, T: int, drop_remainder: bool = False) -> "Fasta":
+        """Resamples the :class:`Fasta` object such that each sequence
         is grouped into chunks of the given length. This can lead to
         differently padded sequences.
-        This method does not create a new FASTA object but is an
+        This method does not create a new Fasta object but is an
         in-place operation.
 
         Args:
@@ -485,7 +581,7 @@ class FASTA:
         }
 
     def rename(self, name: str | Callable[[str], str]) -> None:
-        """Changes the name of all sequences in this FASTA object.
+        """Changes the name of all sequences in this Fasta object.
 
         Args:
             name (str | callable): If a string is given, changes the
@@ -501,24 +597,27 @@ class FASTA:
         for seq in self._sequences:
             seq.name = rename(seq.name)
 
-    def copy(self) -> "FASTA":
-        return FASTA([seq.copy() for seq in self._sequences])
+    def copy(self) -> "Fasta":
+        return Fasta([seq.copy() for seq in self._sequences])
 
     @overload
     def __getitem__(self, key: int | str) -> Sequence:
         ...
     @overload
-    def __getitem__(self, key: slice) -> "FASTA":
+    def __getitem__(self, key: slice) -> "Fasta":
         ...
-    def __getitem__(self, key: int | slice | str) -> "Sequence | FASTA":
+    def __getitem__(self, key: int | slice | str) -> "Sequence | Fasta":
         if isinstance(key, slice):
-            return FASTA(self._sequences[key])
+            return Fasta(self._sequences[key])
         if isinstance(key, int):
             return self._sequences[key]
         for seq in self._sequences:
             if seq.name == key:
                 return seq
         raise KeyError(f"Sequence with name {key!r} does not exist.")
+
+    def __iter__(self) -> Iterator[Sequence]:
+        return iter(self._sequences)
 
     def __len__(self) -> int:
         return len(self._sequences)
@@ -527,4 +626,4 @@ class FASTA:
         return "[" + ", ".join(str(seq) for seq in self._sequences) + "]"
 
     def __repr__(self) -> str:
-        return "FASTA(" + ", ".join(str(seq) for seq in self._sequences) + ")"
+        return "Fasta(" + ", ".join(str(seq) for seq in self._sequences) + ")"

@@ -2,9 +2,34 @@ import bisect
 import re
 import warnings
 from enum import Enum
+from functools import reduce
 from typing import Callable, Literal
 
-from .fasta import Region
+import numpy as np
+
+from .fasta import Region, Sequence
+
+_CODON_TABLE = {
+        "TTT": "F", "TTC": "F", "TTA": "L", "TTG": "L",
+        "TCT": "S", "TCC": "S", "TCA": "S", "TCG": "S",
+        "TAT": "Y", "TAC": "Y", "TAA": "*", "TAG": "*",
+        "TGT": "C", "TGC": "C", "TGA": "*", "TGG": "W",
+
+        "CTT": "L", "CTC": "L", "CTA": "L", "CTG": "L",
+        "CCT": "P", "CCC": "P", "CCA": "P", "CCG": "P",
+        "CAT": "H", "CAC": "H", "CAA": "Q", "CAG": "Q",
+        "CGT": "R", "CGC": "R", "CGA": "R", "CGG": "R",
+
+        "ATT": "I", "ATC": "I", "ATA": "I", "ATG": "M",
+        "ACT": "T", "ACC": "T", "ACA": "T", "ACG": "T",
+        "AAT": "N", "AAC": "N", "AAA": "K", "AAG": "K",
+        "AGT": "S", "AGC": "S", "AGA": "R", "AGG": "R",
+
+        "GTT": "V", "GTC": "V", "GTA": "V", "GTG": "V",
+        "GCT": "A", "GCC": "A", "GCA": "A", "GCG": "A",
+        "GAT": "D", "GAC": "D", "GAA": "E", "GAG": "E",
+        "GGT": "G", "GGC": "G", "GGA": "G", "GGG": "G",
+    }
 
 
 class FeatureType(Enum):
@@ -110,6 +135,77 @@ class Transcript:
         }
         self.start = -1
         self.end = -1
+
+    def coding_sequence(self, sequence: Sequence) -> Sequence:
+        """Returns the sequence of nucleotides that corresponds to the
+        coding sequence in this transcript.
+        """
+        if self.seqname != sequence.name:
+            raise KeyError(
+                f"Transcript {self.id!r} is in sequence {self.seqname!r}, "
+                "which does not match the name of the provided sequence "
+                f"{sequence.name!r}."
+            )
+
+        coords = self.coords(FeatureType.CDS)
+        if not coords:
+            return Sequence(np.array([]), name=sequence.name)
+        coords = sorted(coords, key=lambda x: x[0])
+
+        joined = reduce(
+            lambda x, y: x.join(y),
+            [sequence.positions(s, e) for s, e in coords],
+        )
+        if self.strand == "-":
+            joined = joined.complement(reverse=True)
+
+        return joined
+
+    def protein_sequence(
+        self,
+        sequence: Sequence,
+        *,
+        drop_terminal_stop: bool = True,
+        require_multiple_of_three: bool = False,
+    ) -> str:
+        """Translate the coding region of the transcript into
+        standard-code amino acids. Unknown/ambiguous codons are set to
+        'X' and stop codons are set to '*'.
+
+        Args:
+            drop_terminal_stop (bool, optional): If true, removes a
+                trailing '*' (common convention). Defaults to True.
+            require_multiple_of_three (bool, optional): If true, raises
+                a ValueError if `len(CDS) % 3 != 0`. Defaults to False.
+        """
+        cds = self.coding_sequence(sequence).string()
+        if not cds: return ""
+
+        cds_u = cds.upper().replace("U", "T")
+        if len(cds_u) % 3 != 0:
+            msg = (
+                f"CDS length for transcript {self.id!r} is {len(cds_u)}, "
+                "not a multiple of 3."
+            )
+            if require_multiple_of_three: raise ValueError(msg)
+            warnings.warn(
+                msg + " Truncating trailing nucleotides for translation."
+            )
+            cds_u = cds_u[:3*(len(cds_u)//3)]
+
+        aa = []
+        for i in range(0, len(cds_u), 3):
+            codon = cds_u[i:i+3]
+            # if any ambiguity or non-ACGT, emit X
+            if any(b not in "ACGT" for b in codon):
+                aa.append("X")
+            else:
+                aa.append(_CODON_TABLE.get(codon, "X"))
+
+        prot = "".join(aa)
+        if drop_terminal_stop and prot.endswith("*"):
+            prot = prot[:-1]
+        return prot
 
     def add(self, entry: GTFEntry) -> None:
         """Adds a :class:`GTFEntry` object to the transcript."""

@@ -1,10 +1,16 @@
-import warnings
-from timeit import default_timer
+import gzip
+import shutil
+import tempfile
+import textwrap
+from collections.abc import Container
+from pathlib import Path
 from typing import Callable, Literal
 
 import numpy as np
 
-from ..struct import FASTA, Annotation, FeatureType, GTFEntry, Region, Sequence
+from ..io import iterate_sequences
+from ..log import log_it, setup_logging
+from ..struct import Annotation, Fasta, FeatureType, GTFEntry, Region, Sequence
 
 HMM_STATE_AGGREGATION = np.array([
     [1., 0., 0., 0., 0.],  # IR
@@ -55,29 +61,18 @@ def _split_regions(
 
 def _transcripts_from_regions(
     regions: list[Region],
-    seperate_first: bool = True,
-) -> tuple[list[Region], list[list[Region]], list[Region]]:
+) -> list[list[Region]]:
     """Extracts transcript regions (IR to IR) from a given tuples of
     class regions. For each transcript, it extracts the regions of their
-    CDS. Additionally, it reports fragmented txs at the start or end of
-    the input ranges.
+    CDS. Only complete transcripts that have an intergenic region before
+    and after them are considered.
 
     Args:
         regions (list[Region]): A sequence of regions, classifying parts
             of a genome sequence into different labels.
-
-    Returns:
-        initial_tx (list): A fragmented transcript at the start of the
-            given regions.
-        txs (list of lists): A list of complete transcripts within the
-            given regions.
-        current_tx (list): A fragmented transcript at the end of the
-            given regions.
     """
-    initial_tx: list[Region] = []
     txs: list[list[Region]] = []
     current_tx: list[Region] = []
-
     for region in regions:
         if region.name == 'intergenic':
             if current_tx:
@@ -85,93 +80,20 @@ def _transcripts_from_regions(
                 current_tx = []
         else:
             current_tx.append(region)
-    if seperate_first and regions[0].name != 'intergenic' and txs:
-        initial_tx = txs[0]
+    if regions[0].name != 'intergenic' and txs:
         txs = txs[1:]
-    return initial_tx, txs, current_tx
-
-
-def _merge_reprediction(
-    all_tx: list[list[Region]],
-    new_tx: list[list[Region]],
-    breakpoint: int,
-) -> list[list[Region]]:
-    """Merges two sets of transcript predictions (`all_tx` and `new_tx`)
-    at a specified breakpoint.
-
-    This function integrates predictions from two different prediction
-    sets by considering their overlaps and the specified breakpoint. It
-    aims to create a combined prediction that respects the continuity of
-    transcripts across the breakpoint, favoring the retention of longer
-    transcripts or more accurate predictions based on the overlap
-    analysis.
-
-    Arguments:
-        all_tx (list of tuples): The list of all current transcript
-            predictions before the breakpoint. Each element in the list
-            is a tuple representing a transcript with its start and end
-            positions.
-        new_tx (list of tuples): The list of new transcript predictions
-            that may overlap with `all_tx` at the breakpoint.
-        breakpoint (int): The position in the sequence where the
-            division between the old and new predictions is made.
-
-    Returns:
-        list[Region]: The merged list of transcript predictions,
-            considering the breakpoint and overlaps between `all_tx`
-            and `new_tx`.
-
-    The merging process follows these rules:
-        - If one of the prediction sets is empty, it returns the
-            concatenation of both.
-        - If the breakpoint is in the intergenic region (outside the
-            range of any transcripts in both sets), it merges the
-            predictions without overlapping transcripts.
-        - If the breakpoint indicates overlapping regions but no direct
-            overlap between transcripts, it concatenates the predictions
-            up to and from the breakpoint.
-        - If there's an overlap and one of the transcripts surrounding
-            the breakpoint is larger, the larger transcript is preferred
-            in the merged output.
-    """
-    overlap1 = 0
-    for i, tx in enumerate(all_tx):
-        if breakpoint < tx[0].start:
-            break
-        overlap1 = i
-    overlap2 = 0
-    for i, tx in enumerate(new_tx):
-        if breakpoint < tx[0].start:
-            break
-        overlap2 = i
-
-    if not all_tx or not new_tx:
-        # no tx in one of the predictions
-        return all_tx + new_tx
-    elif (breakpoint > all_tx[overlap1][-1].end
-            and breakpoint > new_tx[overlap2][-1].end):
-        # breakpoint already in intergenic region of both sets
-        return all_tx[:overlap1+1] + new_tx[overlap2+1:]
-    elif all_tx[overlap1][-1].end < new_tx[overlap2][0].start:
-        # breakpoint in one of the transcripts but they don't overlap
-        return all_tx[:overlap1+1] + new_tx[overlap2:]
-    elif (all_tx[overlap1][-1].end - all_tx[overlap1][0].start
-            > new_tx[overlap2][-1].end - new_tx[overlap2][0].start):
-        # tx from all_tx is larger so keep it instead of the one from new_tx
-        return all_tx[:overlap1+1] + new_tx[overlap2+1:]
-    else:
-        # tx from new_tx is larger so keep it instead of the one from all_tx
-        return all_tx[:overlap1] + new_tx[overlap2:]
+    return txs
 
 
 def _annotation_from_dict(
     entries_fwd: dict[str, list[list[Region]]],
     entries_bwd: dict[str, list[list[Region]]],
     model_name: str = "Model",
-) -> Annotation:
+    first_tx_id: int = 0,
+) -> tuple[Annotation, int]:
     annotation = Annotation()
-    tx_id = 0
-    for seq in entries_fwd:
+    tx_id = first_tx_id
+    for seq in sorted(set(entries_fwd) | set(entries_bwd)):
         phase = -1
         len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
         len_bwd = 0 if seq not in entries_bwd else len(entries_bwd[seq])
@@ -206,238 +128,7 @@ def _annotation_from_dict(
                     phase = (3 - (r.end - r.start - phase) % 3) % 3
             len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
             len_bwd = 0 if seq not in entries_bwd else len(entries_bwd[seq])
-    return annotation
-
-
-def _GTF_from_model_conservative(
-    fasta: FASTA,
-    predict_func: Callable[[FASTA],
-        tuple[np.ndarray, np.ndarray | None]
-        | tuple[np.ndarray | None, np.ndarray]
-        | tuple[np.ndarray, np.ndarray],
-    ],
-    model_name: str = "Model",
-    verbose: bool = True,
-) -> Annotation:
-    if verbose: start_time = default_timer()
-
-    if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Start initial prediction of "
-        f"{fasta.N} sequences.",
-        flush=True,
-    )
-
-    labels_fwd, labels_bwd = predict_func(fasta)
-
-    if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Searching for errors.",
-        flush=True,
-    )
-
-    repred_seqs = []
-    repred_index = []
-    repred_strand = []
-    for i in range(fasta.N-1):
-        if (fasta.segments[i].name == fasta.segments[i+1].name):
-            fwd = bwd = False
-
-            if labels_fwd is not None and not (
-                labels_fwd[i, -1] == labels_fwd[i+1, 0] == 0
-            ):
-                fwd = True
-            if labels_bwd is not None and not(
-                labels_bwd[i, -1] == labels_bwd[i+1, 0] == 0
-            ):
-                bwd = True
-
-            if fwd or bwd:
-                repred_seqs.append(Sequence(
-                    np.expand_dims(
-                        np.concatenate((fasta.nuc[i], fasta.nuc[i+1]), axis=0),
-                        axis=0,
-                    ),
-                    name=fasta.segments[i].name,
-                    start=fasta.segments[i].start,
-                    end=fasta.segments[i+1].end,
-                ))
-                repred_index.append(i)
-                if fwd and bwd:
-                    repred_strand.append(2)
-                else:
-                    repred_strand.append(0 if fwd else 1)
-
-    if len(repred_seqs) > 0:
-        if verbose: print(
-            f"[{default_timer()-start_time:.4f}s] Mismatches: "
-            f"{repred_strand.count(0)} (+) | {repred_strand.count(1)} (-) | "
-            f"{repred_strand.count(2)} (+/-). "
-            f"Repredicting {len(repred_seqs)} sequences.",
-            flush=True,
-        )
-        repred_fwd, repred_bwd = predict_func(FASTA(repred_seqs))
-
-    if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Forming regions.",
-        flush=True,
-    )
-
-    entries_fwd: dict[str, list[list[Region]]] = {}
-    entries_bwd: dict[str, list[list[Region]]] = {}
-    re_txs_f = None
-    re_txs_b = None
-    last_end_f = []
-    last_end_b = []
-    for i, segment in enumerate(fasta.segments):
-
-        coord_diff = 0 if i == 0 else (segment.end - fasta.segments[i-1].start)
-
-        if labels_fwd is not None:
-            regions_fwd = _split_regions(
-                labels_fwd[i],
-                segment.start,
-                strand="+",
-            )
-            start_f, txs_f, end_f = _transcripts_from_regions(regions_fwd)
-            if segment.name not in entries_fwd: entries_fwd[segment.name] = []
-
-            is_ir_f = 'intergenic' in [r.name for r in regions_fwd]
-            if (re_txs_f is None and is_ir_f and start_f and last_end_f and
-                (i == 0 or labels_fwd[i-1, -1] == labels_fwd[i, 0])
-            ):
-                last_end_f[-1].end = start_f[0].end
-                last_end_f += start_f[1:]
-                entries_fwd[segment.name] += [last_end_f]
-
-            if is_ir_f and len(txs_f) > 0:
-                if re_txs_f is not None:
-                    entries_fwd[segment.name] = _merge_reprediction(
-                        entries_fwd[segment.name],
-                        txs_f,
-                        segment.start + coord_diff//2,
-                    )
-                else:
-                    if i == 0 and len(start_f) > 0:
-                        entries_fwd[segment.name] += [start_f]
-                    entries_fwd[segment.name] += txs_f
-            if is_ir_f:
-                last_end_f = end_f
-
-        if labels_bwd is not None:
-            regions_bwd = _split_regions(
-                labels_bwd[i],
-                segment.start,
-                strand="-",
-            )
-            start_b, txs_b, end_b = _transcripts_from_regions(regions_bwd)
-            if segment.name not in entries_bwd: entries_bwd[segment.name] = []
-
-            is_ir_b = 'intergenic' in [r.name for r in regions_bwd]
-            if (re_txs_b is None and is_ir_b and start_b and last_end_b and
-                (i == 0 or labels_bwd[i-1, -1] == labels_bwd[i, 0])
-            ):
-                last_end_b[-1].end = start_b[0].end
-                last_end_b += start_b[1:]
-                entries_bwd[segment.name] += [last_end_b]
-
-            if is_ir_b and len(txs_b) > 0:
-                if re_txs_b is not None:
-                    entries_bwd[segment.name] = _merge_reprediction(
-                        entries_bwd[segment.name],
-                        txs_b,
-                        segment.start + coord_diff//2,
-                    )
-                else:
-                    if i == 0 and len(start_b) > 0:
-                        entries_bwd[segment.name] += [start_b]
-                    entries_bwd[segment.name] += txs_b
-            if is_ir_b:
-                last_end_b = end_b
-
-        re_txs_f = None
-        re_txs_b = None
-        if len(repred_index) > 0 and i == repred_index[0]:
-            repred_index.pop(0)
-            strand = repred_strand.pop(0)
-
-            if strand == 0 or strand == 2:
-                c_re = Region(
-                    name=segment.name,
-                    start=segment.start,
-                    end=segment.end+coord_diff,
-                    strand="+",
-                )
-                current_re = repred_fwd[0]  # type: ignore
-                repred_fwd = repred_fwd[1:]  # type: ignore
-                re_ranges = _split_regions(current_re, c_re.start)
-                start_f, re_txs_f, end_f = _transcripts_from_regions(re_ranges)
-
-                if (
-                    not is_ir_f
-                    and last_end_f
-                    and start_f
-                    and labels_fwd[i-1, -1] == current_re[0]  # type: ignore
-                ):
-                    last_end_f[-1].end = start_f[0].end
-                    last_end_f += start_f[1:]
-                    entries_fwd[segment.name] += [last_end_f]
-                if re_txs_f:
-                    entries_fwd[segment.name] = _merge_reprediction(
-                        entries_fwd[segment.name],
-                        re_txs_f,
-                        c_re.start + coord_diff // 2,
-                    )
-                last_end_f = end_f
-
-            if strand == 1 or strand == 2:
-                c_re = Region(
-                    name=segment.name,
-                    start=segment.start,
-                    end=segment.end+coord_diff,
-                    strand="-",
-                )
-                current_re = repred_bwd[0]  # type: ignore
-                repred_bwd = repred_bwd[1:]  # type: ignore
-                re_ranges = _split_regions(current_re, c_re.start)
-                start_b, re_txs_b, end_b = _transcripts_from_regions(re_ranges)
-
-                if (
-                    not is_ir_b
-                    and last_end_b
-                    and start_b
-                    and labels_bwd[i-1, -1] == current_re[0]  # type: ignore
-                ):
-                    last_end_b[-1].end = start_b[0].end
-                    last_end_b += start_b[1:]
-                    entries_bwd[segment.name] += [last_end_b]
-                if re_txs_b:
-                    entries_bwd[segment.name] = _merge_reprediction(
-                        entries_bwd[segment.name],
-                        re_txs_b,
-                        c_re.start + coord_diff // 2,
-                    )
-                last_end_b = end_b
-
-    if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Creating GTF entries.",
-        flush=True,
-    )
-
-    annotation = _annotation_from_dict(
-        entries_fwd,
-        entries_bwd,
-        model_name=model_name,
-    )
-
-    if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Finalizing.",
-        flush=True,
-    )
-    annotation.finalize()
-    if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Done.",
-        flush=True,
-    )
-    return annotation
+    return annotation, tx_id
 
 
 def _find_mismatches(
@@ -482,19 +173,20 @@ def _first_non_zero(x: np.ndarray) -> int:
     https://stackoverflow.com/questions/7632963/
         numpy-find-first-index-of-value-fast
     """
+    if x.size == 0: return -1
     idx = x.view(bool).argmax() // x.itemsize
     idx = idx if x[idx] else -1
     return idx
 
 
-def _GTF_from_model_liberal(
-    fasta: FASTA,
-    predict_func: Callable[[FASTA],
+def _annotate(
+    fasta: Fasta,
+    predict_func: Callable[[Fasta],
         tuple[np.ndarray, np.ndarray | None]
         | tuple[np.ndarray | None, np.ndarray]
         | tuple[np.ndarray, np.ndarray],
     ],
-    repredict_func: Callable[[FASTA],
+    repredict_func: Callable[[Fasta],
         tuple[np.ndarray, np.ndarray | None]
         | tuple[np.ndarray | None, np.ndarray]
         | tuple[np.ndarray, np.ndarray],
@@ -502,22 +194,12 @@ def _GTF_from_model_liberal(
     reprediction_factor: float = 0.5,
     exon_at_boundary: int | None = None,
     model_name: str = "Model",
-    verbose: bool = True,
-) -> Annotation:
-    if verbose: start_time = default_timer()
-
-    if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Start initial prediction of "
-        f"{fasta.N} sequences.",
-        flush=True,
-    )
-
+    first_tx_id: int = 0,
+    concat_strand_to_reprediction: bool = False,
+) -> tuple[Annotation, int]:
+    log_it(f"Start initial prediction of {fasta.N} chunks.")
     labels_fwd, labels_bwd = predict_func(fasta)
-
-    if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Searching for errors.",
-        flush=True,
-    )
+    log_it("Searching for errors.")
 
     repred_seqs = []
     repred_index = []
@@ -549,6 +231,7 @@ def _GTF_from_model_liberal(
         mis_bwd = mis_bwd[~np.isin(mis_bwd, mis_fwd)]
         mis_fwd = mis_fwd[~dupli]
         mis = np.r_[mis_fwd, mis_bwd, mis_both]
+        mis = mis.astype(int)
         total_mis_fwd += len(mis_fwd)
         total_mis_bwd += len(mis_bwd)
         total_mis_both += len(mis_both)
@@ -560,34 +243,35 @@ def _GTF_from_model_liberal(
             np.ones(len(mis_both), dtype=np.int32)+1,
         ])
         if mis.size > 0:
-            repred_seqs.append(Sequence(
-                np.concatenate(
-                    (fasta.nuc[mis, -repred_t:], fasta.nuc[mis+1, :repred_t]),
-                    axis=-1,
-                ),
-                name=seq.name,
-            ))
+            cseq = Sequence(np.concatenate(
+                (fasta.nuc[mis, -repred_t:], fasta.nuc[mis+1, :repred_t]),
+                axis=-1,
+            ), name=seq.name)
+            if concat_strand_to_reprediction:
+                strands = np.r_[
+                    np.zeros((len(mis_fwd), 2*repred_t), dtype=np.uint8),
+                    np.ones((len(mis_bwd), 2*repred_t), dtype=np.uint8),
+                    np.ones((len(mis_both), 2*repred_t), dtype=np.uint8)+1,
+                ]
+                cseq.evidence = strands
+            repred_seqs.append(cseq)
         shift += seq.N
 
     total = total_mis_fwd + total_mis_bwd + total_mis_both
     if len(repred_seqs) > 0:
-        if verbose: print(
-            f"[{default_timer()-start_time:.4f}s] Mismatches: "
+        log_it(
+            "Mismatches: "
             f"{total_mis_fwd} (+) | {total_mis_bwd} (-) | "
             f"{total_mis_both} (+/-). "
-            f"Repredicting {total} sequences.",
-            flush=True,
+            f"Repredicting {total} chunks."
         )
 
         if repredict_func is not None:
-            repred_fwd, repred_bwd = repredict_func(FASTA(repred_seqs))
+            repred_fwd, repred_bwd = repredict_func(Fasta(repred_seqs))
         else:
-            repred_fwd, repred_bwd = predict_func(FASTA(repred_seqs))
+            repred_fwd, repred_bwd = predict_func(Fasta(repred_seqs))
 
-        if verbose: print(
-            f"[{default_timer()-start_time:.4f}s] Merging repredictions.",
-            flush=True,
-        )
+        log_it("Merging repredictions.")
 
     failed_fwd = {}
     failed_bwd = {}
@@ -619,11 +303,10 @@ def _GTF_from_model_liberal(
                 failed_bwd[repred_sequence[k]].append((i+1) * fasta.T)
 
     if len(failed_fwd) + len(failed_bwd) > 0:
-        if verbose: print(
-            f"[{default_timer()-start_time:.4f}s] Merging failed for: "
+        log_it(
+            "Merging failed for: "
             f"{len(failed_fwd)} (+) | {len(failed_bwd)} (-). "
-            f"Setting the areas to intergenic regions.",
-            flush=True,
+            f"Setting the areas to intergenic regions."
         )
         shift = 0
         for seq_i, seq in enumerate(fasta):
@@ -651,10 +334,7 @@ def _GTF_from_model_liberal(
                 labels_bwd[shift:shift+seq.N, :] = lbl_seq.reshape(-1, fasta.T)
             shift += seq.N
 
-    if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Forming regions.",
-        flush=True,
-    )
+    log_it("Forming regions.")
 
     entries_fwd: dict[str, list[list[Region]]] = {}
     entries_bwd: dict[str, list[list[Region]]] = {}
@@ -662,122 +342,304 @@ def _GTF_from_model_liberal(
     for seq in fasta:
         if labels_fwd is not None:
             regions = _split_regions(
-                labels_fwd[shift:shift+seq.N, :].flatten(),
+                labels_fwd[shift:shift+seq.N, :].flatten()[:seq.size],
                 strand="+",
             )
-            _, txs, _ = _transcripts_from_regions(regions, seperate_first=True)
-            if seq.name not in entries_fwd:
-                entries_fwd[seq.name] = []
-            entries_fwd[seq.name] += txs
+            if seq.name not in entries_fwd: entries_fwd[seq.name] = []
+            entries_fwd[seq.name] += _transcripts_from_regions(regions)
 
         if labels_bwd is not None:
             regions = _split_regions(
-                labels_bwd[shift:shift+seq.N, :].flatten(),
+                labels_bwd[shift:shift+seq.N, :].flatten()[:seq.size],
                 strand="-",
             )
-            _, txs, _ = _transcripts_from_regions(regions, seperate_first=True)
-            if seq.name not in entries_bwd:
-                entries_bwd[seq.name] = []
-            entries_bwd[seq.name] += txs
+            if seq.name not in entries_bwd: entries_bwd[seq.name] = []
+            entries_bwd[seq.name] += _transcripts_from_regions(regions)
 
         shift += seq.N
 
-    if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Creating GTF entries.",
-        flush=True,
-    )
-
-    annotation = _annotation_from_dict(
+    log_it("Creating GTF entries.")
+    annotation, last_tx_id = _annotation_from_dict(
         entries_fwd,
         entries_bwd,
         model_name=model_name,
+        first_tx_id=first_tx_id,
     )
-
-    if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Finalizing.",
-        flush=True,
-    )
+    log_it("Finalizing.")
     annotation.finalize()
-    if verbose: print(
-        f"[{default_timer()-start_time:.4f}s] Done.",
-        flush=True,
-    )
-    return annotation
+    return annotation, last_tx_id
 
 
-def GTF_from_model(
-    fasta: FASTA,
-    predict_func: Callable[[FASTA],
+def _annotate_genome(
+    fasta: Path | str,
+    predict_func: Callable[[Fasta],
         tuple[np.ndarray, np.ndarray | None]
         | tuple[np.ndarray | None, np.ndarray]
         | tuple[np.ndarray, np.ndarray],
     ],
-    repredict_func: Callable[[FASTA],
+    output: Path | str,
+    T_max: int = 500_000,
+    T_delta: float = 0.1,
+    T_factors: list[int] | None = None,
+    group_size_limit: int | None = 1_000_000_000,
+    model_name: str = "bricks2marble",
+    min_sequence_size: int | None = 1_000,
+    include_seqs: Container[str] | None = None,
+    exclude_seqs: Container[str] | None = None,
+    split_seqnames: bool = True,
+    repredict_func: Callable[[Fasta],
         tuple[np.ndarray, np.ndarray | None]
         | tuple[np.ndarray | None, np.ndarray]
         | tuple[np.ndarray, np.ndarray],
     ] | None = None,
     reprediction_factor: float = 0.5,
-    model_name: str = "Model",
-    verbose: bool = True,
     repredict_exon_at_boundary: int | None = None,
-    liberal: bool = False,
-) -> Annotation:
-    """Generate a genome annotation using a nucleotide sequence and a
-    function that outputs feature labels of regions of interest.
+    concat_strand_to_reprediction: bool = False,
+    postprocess: Callable[[Fasta, Annotation], Annotation] | None = None,
+) -> None:
+    wrapper = textwrap.TextWrapper(
+        width=99,
+        initial_indent=" " * 13,
+        subsequent_indent=" " * 13,
+        break_long_words=False,
+        break_on_hyphens=False,
+    )
+
+    first_tx_id = 0
+    for i, group in enumerate(iterate_sequences(
+        fasta,
+        T_max=T_max,
+        delta=T_delta,
+        T_factors=T_factors,
+        group_size_limit=group_size_limit,
+        min_sequence_size=min_sequence_size,
+        include=include_seqs,
+        exclude=exclude_seqs,
+        split_name=split_seqnames,
+        log=True,
+    )):
+        log_it(
+            f"\n{f'Group {i+1}':=^99}\n"
+                f"> sequences: {len(group)}\n"
+                f"{wrapper.fill(', '.join([s.name for s in group]))}\n"
+                f"> chunk length: {group.T}\n",
+            extra={"timer": False},
+        )
+        group_annotation, last_tx_id = _annotate(
+            group,
+            predict_func=predict_func,
+            repredict_func=repredict_func,
+            reprediction_factor=reprediction_factor,
+            concat_strand_to_reprediction=concat_strand_to_reprediction,
+            model_name=model_name,
+            exon_at_boundary=repredict_exon_at_boundary,
+            first_tx_id=first_tx_id,
+        )
+        if postprocess is not None:
+            log_it("Calling postprocessing function.")
+            group_annotation = postprocess(group, group_annotation)
+        log_it("Writing annotation to file.")
+        group_annotation.to_gtf(output, mode="a")
+        log_it("Done.")
+        first_tx_id = last_tx_id
+
+
+def annotate_genome(
+    fasta: Path | str,
+    predict_func: Callable[[Fasta],
+        tuple[np.ndarray, np.ndarray | None]
+        | tuple[np.ndarray | None, np.ndarray]
+        | tuple[np.ndarray, np.ndarray],
+    ],
+    output: Path | str,
+    log_file: Path | str | None = None,
+    allow_extract_gz: bool = False,
+    model_name: str = "bricks2marble",
+    T_max: int = 500_000,
+    T_delta: float = 0.1,
+    T_factors: list[int] | None = None,
+    group_size_limit: int | None = 1_000_000_000,
+    min_sequence_size: int | None = 1_000,
+    split_seqnames: bool = True,
+    include_seqs: Container[str] | None = None,
+    exclude_seqs: Container[str] | None = None,
+    repredict_func: Callable[[Fasta],
+        tuple[np.ndarray, np.ndarray | None]
+        | tuple[np.ndarray | None, np.ndarray]
+        | tuple[np.ndarray, np.ndarray],
+    ] | None = None,
+    reprediction_factor: float = 0.5,
+    repredict_exon_at_boundary: int | None = None,
+    concat_strand_to_reprediction: bool = False,
+    postprocess: Callable[[Fasta, Annotation], Annotation] | None = None,
+    log_config: list[str] | None = None,
+) -> None:
+    """Generate a genome annotation of a given fasta file.
+
+    The fasta file is read in groups of sequences which total size can
+    be specified. The annotation is written on-the-fly.
 
     Args:
-        fasta (FASTA): A :class:`FASTA` object containing the nucleotide
-            sequences of interest.
-        predict_func (Callable): A function that takes a :class:`FASTA`
+        fasta (Path | str): Path to a fasta file.
+        predict_func (Callable): A function that takes a :class:`Fasta`
             object as input and outputs one or two numpy arrays. Each of
-            these array has to have shape ``(N, T)``, where ``N`` is
+            these arrays have to have shape ``(N, T)``, where ``N`` is
             the number of sequences in the given `fasta` and ``T`` is
             its chunk size. The output should be integers of states from
             the :class:`bricks2marble.tf.HMM`. The first numpy array is
             a prediction on the forward strand, the second a prediction
             on the reverse strand. One of them can be missing.
+        output (Path | str): Path for the output gtf file. Raises an
+            error if the file already exists.
+        log_file (Path | str, optional): The file to write a log to.
+            Defaults to the same file path as `output`, except with the
+            suffix being replaced by `.log`.
+        allow_extract_gz (bool, optional): If set to True, allows the
+            input path to be a `.gz` file. For the duration of the
+            annotation, this file will be extracted to a `.fa` file at
+            the same location with a random name. This ensures that the
+            same `.gz` file can be annotated multiple times at once, for
+            example in a cluster. Defaults to False.
+        model_name (str, optional): Name of the model that is used, or
+            any other identifier. This will be listed as the 'source' in
+            the gtf. Defaults to "bricks2marble".
+        T_max (int, optional): Size of chunks in the Fasta given to
+            `predict_func`. If all sequences in a group are smaller than
+            `T_max`, the chunk size for that group is determined by the
+            largest sequence in the group. Defaults to `500_000`.
+        T_delta (float, optional): The value `T_max * T_delta` is the
+            minimal size of sequences in the first group. Subsequent
+            groups have sequences larger than `T * T_delta`, where `T`
+            is the chunk length of this group. Defaults to 0.1.
+        T_factors (list[int], optional): Imposes extra conditions on
+            newly chosen values for the chunk length in case that all
+            sequences in a group are smaller than `T_max`. A candidate
+            needs to also be divisible by the given numbers. Defaults to
+            no such conditions.
+        group_size_limit (int, optional): If specified, limits the
+            number of nucleotides in each group. Once the limit is
+            surpassed, a new group is started with the same chunk size.
+            Defaults to 1_000_000_000.
+        min_sequence_size (int, optional): If specified, does not return
+            sequences with a lower number of nucleotides. Defaults to
+            1000.
+        split_seqnames (bool, optional): If True, shortens all sequence
+            names by cutting at the first whitespace. Defaults to True.
+        include_seqs (Container[str], optional): Container of sequence
+            names to include in the annotation. The sequence names are
+            expected to be also split at the first whitespace, if
+            `split_seqnames` is True. Defaults to all sequences.
+        exclude_seqs (Container[str], optional): Container of sequence
+            names to exclude in the annotation. The sequence names are
+            expected to be also split at the first whitespace, if
+            `split_seqnames` is True. If a name is in `include_seqs` and
+            `exclude_seqs`, it will be excluded. Defaults to no excluded
+            sequences.
         repredict_func (Callable, optional): A function of the same
             nature as `predict_func`, but used for the second stage of
             predictions that solves mismatches of the first. The default
-            is None, where `predict_func` is used for repredictions,
-            too. Only used for `liberal` case.
+            is that `predict_func` is used for repredictions, too.
         reprediction_factor (float, optional): A float between 0 and 1
             that determines the length of chunks used in the
             reprediction. A value of 1 means that the size is twice the
-            size of the first predictions. Only used for `liberal` case.
-        model_name (str): Name of the model that is used, or any other
-            identifier. This will only be listed as the 'source' in the
-            GTF file.
-        verbose (bool, optional): Toogle verbosity of the function.
-            Defaults to False.
+            size of the first predictions.
         repredict_exon_at_boundary (int, optional): If the model
-            predicts an exon within ``k`` positions left and right of
-            a break point, a reprediction will be made. This works only
-            if ``liberal=True``. Here, ``k`` is the given number for
-            this argument. Defaults to no additional checks for exons.
-        liberal (bool, optional): Can be used to switch between two
-            annotation functions: "conservative" or "liberal". The
-            former is based on a more strict search for transcripts, the
-            latter is simpler but is not guaranteed to succeed in making
-            a full annotation. However, the liberal variant makes
-            repredictions on sequences of the same length as the chunks
-            in the given ``fasta``, while the conservative variant needs
-            twice this length. Defaults to the conservative function.
+            predicts an exon within ``k`` positions left and right of a
+            break point, a reprediction will be made. This works only if
+            ``liberal=True``. Here, ``k`` is the given number for this
+            argument. Defaults to no additional checks for exons.
+        concat_strand_to_reprediction (bool, optional): If True, appends
+            a numpy array of integers `{0, 1, 2}` as a `Fasta.evidence`
+            entry to the sequences that are given to the reprediction
+            function. A `0` means that this sequence is for the forward
+            strand, `1` for the backward strand and `2` for both.
+            Defaults to False.
+        postprocess (callable, optional): An optional function that
+            changes each annotation before writing it to the gtf file.
+            Useful for cleaning up errors from the prediction. The
+            function takes a :class:`Fasta` and an :class:`Annotation`
+            object as arguments and returns an :class:`Annotation`
+            object.
+        log_config (list[str], optional): A list of strings to
+            write to the `log_file` as additional information at the
+            start of the annotation. Defaults to None.
     """
-    if liberal:
-        return _GTF_from_model_liberal(
-            fasta,
+    fasta = Path(fasta)
+    output = Path(output)
+    if output.exists():
+        raise FileExistsError(
+            f"The target output path {output} points to an existing file."
+        )
+    if log_file is None: log_file = output.parent / f"{output.stem}.log"
+
+    setup_logging(log_file)
+
+    log_it(
+        f"{'':-^99}\n|{f'{model_name} genome annotation': ^97}|\n{'':-^99}\n",
+        extra={"timer": False},
+    )
+    config_log = [f"target genome file: {fasta}"]
+    if include_seqs is not None:
+        config_log += [f"include sequences: {include_seqs}"]
+    if exclude_seqs is not None:
+        config_log += [f"exclude sequences: {exclude_seqs}"]
+    config_log += [
+        f"output annotation file: {output}",
+        f"maximal chunk length: {T_max}",
+        f"forced divisors of the chunk length: {T_factors}",
+        f"minimal sequence size: {min_sequence_size}",
+        f"group size limit: {group_size_limit}",
+        f"reprediction factor: {reprediction_factor}",
+        f"repredict exons near boundaries: {(
+            'None' if repredict_exon_at_boundary is None else
+            repredict_exon_at_boundary
+        )}",
+        f"postprocessing: {postprocess is not None}",
+    ]
+    if log_config is not None:
+        config_log += log_config
+    log_it("> " + "\n> ".join(config_log) + "\n", extra={"timer": False})
+
+    def _call_annotate(fasta_file: Path | str):
+        _annotate_genome(
+            fasta=fasta_file,
             predict_func=predict_func,
+            output=output,
+            T_max=T_max,
+            T_delta=T_delta,
+            T_factors=T_factors,
+            group_size_limit=group_size_limit,
+            model_name=model_name,
+            min_sequence_size=min_sequence_size,
+            include_seqs=include_seqs,
+            exclude_seqs=exclude_seqs,
+            split_seqnames=split_seqnames,
             repredict_func=repredict_func,
             reprediction_factor=reprediction_factor,
-            model_name=model_name,
-            exon_at_boundary=repredict_exon_at_boundary,
-            verbose=verbose,
+            repredict_exon_at_boundary=repredict_exon_at_boundary,
+            concat_strand_to_reprediction=concat_strand_to_reprediction,
+            postprocess=postprocess,
         )
-    return _GTF_from_model_conservative(
-        fasta,
-        predict_func=predict_func,
-        model_name=model_name,
-        verbose=verbose,
+
+    if fasta.suffix == ".gz":
+        if not allow_extract_gz: raise RuntimeError(
+            "Given fasta file is a .gz archive but extracting is not allowed."
+        )
+        with tempfile.NamedTemporaryFile(delete=True) as tmp:
+            log_it(
+                "Given file is an archive and has to be extracted.\n"
+                f"> using temporary file location:\n\t{tmp.name}",
+                extra={"timer": False},
+            )
+            with gzip.open(fasta, "rb") as f_fasta_gz:
+                shutil.copyfileobj(f_fasta_gz, tmp)
+
+            fasta = Path(tmp.name)
+            _call_annotate(fasta)
+        return
+    _call_annotate(fasta)
+
+    log_it(
+        f"\n{'':-^99}\n|{'Finished': ^97}|\n{'':-^99}",
+        extra={"timer": False},
     )
