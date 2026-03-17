@@ -583,6 +583,10 @@ def annotate_genome(
         config_log += [f"include sequences: {include_seqs}"]
     if exclude_seqs is not None:
         config_log += [f"exclude sequences: {exclude_seqs}"]
+    log_reab = (
+        'None' if repredict_exon_at_boundary is None
+        else repredict_exon_at_boundary
+    )
     config_log += [
         f"output annotation file: {output}",
         f"maximal chunk length: {T_max}",
@@ -590,10 +594,7 @@ def annotate_genome(
         f"minimal sequence size: {min_sequence_size}",
         f"group size limit: {group_size_limit}",
         f"reprediction factor: {reprediction_factor}",
-        f"repredict exons near boundaries: {(
-            'None' if repredict_exon_at_boundary is None else
-            repredict_exon_at_boundary
-        )}",
+        f"repredict exons near boundaries: {log_reab}",
         f"postprocessing: {postprocess is not None}",
     ]
     if log_config is not None:
