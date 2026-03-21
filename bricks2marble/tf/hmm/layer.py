@@ -21,6 +21,7 @@ class TransitionScorerConfig(ModelConfig):
     activation: str = "swish"
     latent_factor: float = 2.0
     out_activation: str | None = None
+    weight: float | None = None
 
     norm: Literal["layer", "batch"] | None = None
     regularization: float | None = None
@@ -75,6 +76,8 @@ class TransitionScorer(tf.keras.Layer):
         if self.config.norm is not None:
             x = self.norm(x)
         scores = self.f2(self.f1(x))
+        if self.config.weight is not None:
+            scores = self.config.weight * scores
         if self.config.regularization is not None:
             self.add_loss(
                 self.config.regularization * tf.reduce_mean(
@@ -262,7 +265,7 @@ class AnnotationHMM(tf.keras.Layer):
             if (
                 self.config.transitioner_share_frames
                 or self.config.transitioner_share_noncoding
-                or not self.config.train_transitioner
+                or not self.config.train_transitions
             ):
                 raise ValueError(
                     "Input dependent transitions are currently only"
@@ -494,7 +497,7 @@ class AnnotationHMM(tf.keras.Layer):
             emissions = emissions + (repeats, )
         return self.hmm(
             *emissions,
-            # transition_delta=scores,
+            transition_delta=scores,
             mode=mode,
             parallel=parallel,
         )  # type: ignore
