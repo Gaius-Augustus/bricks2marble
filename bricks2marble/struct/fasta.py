@@ -154,7 +154,12 @@ class Sequence:
         self.name = name
         self._sequence = sequence
         self._start = start
-        self._end = end
+        self._end = end if end > 0 else sequence.size
+        if self.size != sequence.size:
+            raise ValueError(
+                "Given boundary sequence indices do not match number of"
+                f" nucleotides ({self._end}-{self._start} != {sequence.size})"
+            )
         self._evidence: np.ndarray | None = None
 
     @property
@@ -187,15 +192,7 @@ class Sequence:
 
     @property
     def end(self) -> int:
-        if self._end >= 0:
-            return self._end
-        else:
-            non_padded = np.nonzero(self._sequence[-1] == -1)
-            if non_padded[0].size > 0:
-                self._end = (self.N-1)*self.T + non_padded[0][0]
-            else:
-                self._end = self._sequence.size
-            return self._end
+        return self._end
 
     @property
     def evidence(self) -> np.ndarray | None:
