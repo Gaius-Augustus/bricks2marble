@@ -10,7 +10,7 @@ import numpy as np
 
 from ..io import iterate_sequences
 from ..log import log_it, setup_logging
-from ..struct import Annotation, Fasta, FeatureType, GTFEntry, Region, Sequence
+from ..struct import CDS, Annotation, Fasta, Region, Sequence, Transcript
 
 HMM_STATE_AGGREGATION = np.array([
     [1., 0., 0., 0., 0.],  # IR
@@ -88,13 +88,11 @@ def _transcripts_from_regions(
 def _annotation_from_dict(
     entries_fwd: dict[str, list[list[Region]]],
     entries_bwd: dict[str, list[list[Region]]],
-    model_name: str = "Model",
     first_tx_id: int = 0,
 ) -> tuple[Annotation, int]:
     annotation = Annotation()
     tx_id = first_tx_id
     for seq in sorted(set(entries_fwd) | set(entries_bwd)):
-        phase = -1
         len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
         len_bwd = 0 if seq not in entries_bwd else len(entries_bwd[seq])
         while len_fwd + len_bwd > 0:
@@ -109,23 +107,16 @@ def _annotation_from_dict(
 
             tx_id += 1
             t_id = f"g{tx_id}.t1"
-            g_id = f"g{tx_id}"
-            phase = 0
-            for r in tx:
-                annotation.add(GTFEntry(
-                    name=seq,
-                    source=model_name,
-                    feature=FeatureType(r.name),
-                    start=r.start,
-                    end=r.end,
-                    score=None,
-                    strand="+" if fwd else "-",
-                    frame=phase,  # type: ignore
-                    attributes=f"gene_id \"{g_id}\"; "
-                                f"transcript_id \"{t_id}\";",
-                ))
-                if r.name == "CDS":
-                    phase = (3 - (r.end - r.start - phase) % 3) % 3
+            # g_id = f"g{tx_id}"
+            annotation.add(Transcript(
+                name=t_id,
+                sequence=seq,
+                strand="+" if fwd else "-",
+                cds=[
+                    CDS(start=r.start, end=r.end)
+                    for r in tx if r.name == "CDS"
+                ],
+            ))
             len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
             len_bwd = 0 if seq not in entries_bwd else len(entries_bwd[seq])
     return annotation, tx_id
@@ -193,7 +184,6 @@ def _annotate(
     ] | None = None,
     reprediction_factor: float = 0.5,
     exon_at_boundary: int | None = None,
-    model_name: str = "Model",
     first_tx_id: int = 0,
     concat_strand_to_reprediction: bool = False,
 ) -> tuple[Annotation, int]:
@@ -334,7 +324,7 @@ def _annotate(
                 labels_bwd[shift:shift+seq.N, :] = lbl_seq.reshape(-1, fasta.T)
             shift += seq.N
 
-    log_it("Forming regions.")
+    log_it("Forming transcripts.")
 
     entries_fwd: dict[str, list[list[Region]]] = {}
     entries_bwd: dict[str, list[list[Region]]] = {}
@@ -358,15 +348,12 @@ def _annotate(
 
         shift += seq.N
 
-    log_it("Creating GTF entries.")
+    log_it("Creating annotation.")
     annotation, last_tx_id = _annotation_from_dict(
         entries_fwd,
         entries_bwd,
-        model_name=model_name,
         first_tx_id=first_tx_id,
     )
-    log_it("Finalizing.")
-    annotation.finalize()
     return annotation, last_tx_id
 
 
@@ -431,7 +418,6 @@ def _annotate_genome(
             repredict_func=repredict_func,
             reprediction_factor=reprediction_factor,
             concat_strand_to_reprediction=concat_strand_to_reprediction,
-            model_name=model_name,
             exon_at_boundary=repredict_exon_at_boundary,
             first_tx_id=first_tx_id,
         )
@@ -439,7 +425,7 @@ def _annotate_genome(
             log_it("Calling postprocessing function.")
             group_annotation = postprocess(group, group_annotation)
         log_it("Writing annotation to file.")
-        group_annotation.to_gtf(output, mode="a")
+        group_annotation.to_genepred(output, mode="a")
         log_it("Done.")
         first_tx_id = last_tx_id
 

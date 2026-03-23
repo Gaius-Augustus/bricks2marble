@@ -1,406 +1,432 @@
-import csv
-import textwrap
-from collections import OrderedDict
-from collections.abc import Generator, Iterator
+import warnings
+from bisect import bisect_right
+from collections import OrderedDict, defaultdict
+from collections.abc import Iterator
+from functools import reduce
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Literal
+from typing import Literal
 
-from .transcript import FeatureType, GTFEntry, Transcript
+from pydantic import BaseModel
 
-if TYPE_CHECKING:
-    from .fasta import Fasta
+from .fasta import Sequence
+
+_CODON_TABLE = {
+    "TTT": "F", "TTC": "F", "TTA": "L", "TTG": "L",
+    "TCT": "S", "TCC": "S", "TCA": "S", "TCG": "S",
+    "TAT": "Y", "TAC": "Y", "TAA": "*", "TAG": "*",
+    "TGT": "C", "TGC": "C", "TGA": "*", "TGG": "W",
+
+    "CTT": "L", "CTC": "L", "CTA": "L", "CTG": "L",
+    "CCT": "P", "CCC": "P", "CCA": "P", "CCG": "P",
+    "CAT": "H", "CAC": "H", "CAA": "Q", "CAG": "Q",
+    "CGT": "R", "CGC": "R", "CGA": "R", "CGG": "R",
+
+    "ATT": "I", "ATC": "I", "ATA": "I", "ATG": "M",
+    "ACT": "T", "ACC": "T", "ACA": "T", "ACG": "T",
+    "AAT": "N", "AAC": "N", "AAA": "K", "AAG": "K",
+    "AGT": "S", "AGC": "S", "AGA": "R", "AGG": "R",
+
+    "GTT": "V", "GTC": "V", "GTA": "V", "GTG": "V",
+    "GCT": "A", "GCC": "A", "GCA": "A", "GCG": "A",
+    "GAT": "D", "GAC": "D", "GAA": "E", "GAG": "E",
+    "GGT": "G", "GGC": "G", "GGA": "G", "GGG": "G",
+}
+T_Label = Literal["cds", "intron", "intergenic"]
+T_StrandLabel = tuple[T_Label, T_Label]
 
 
-class Gene:
-    """Class representing a gene containing multiple transcripts."""
+class CDS(BaseModel):
+    """Object that represents a coding region. Indexing follows Python
+    conventions.
+    """
 
-    def __init__(self, id: str) -> None:
-        self.id = id
-        self.seqname: str | None = None
-        self.strand: Literal["+", "-"] | None = None
-        self.start = -1
-        self.end = -1
-        self._transcripts: OrderedDict[str, Transcript] = OrderedDict()
+    start: int
+    end: int
 
-    def add(self, entry: GTFEntry) -> None:
-        """Adds a gtf entry to this gene by adding it to one of the
-        contained transcripts.
-
-        Args:
-            entry (GTFEntry): The entry that should be added to the
-                gene. Can be of any :class:`FeatureType`.
-
-                *Warning*: The ``start`` and ``end`` attribute of the
-                entry has to align with Python indexing, starting at
-                zero and the end is exclusive.
-        """
-        if entry.feature == FeatureType.Gene:
-            return
-
-        if self.seqname is None: self.seqname = entry.name
-        if self.strand is None: self.strand = entry.strand
-        t_id = entry.attribute("transcript_id")
-        if t_id not in self._transcripts:
-            self._transcripts[t_id] = Transcript(t_id)
-
-        self._transcripts[t_id].add(entry)
-
-        if (self.start < 0 or self._transcripts[t_id].start < self.start):
-            self.start = self._transcripts[t_id].start
-        if self.end < 0 or self._transcripts[t_id].end > self.end:
-            self.end = self._transcripts[t_id].end
-
-    def rename(self, name: str | Callable[[str], str]) -> None:
-        """Changes the name of the sequence this gene is located in by
-        changing the names in all transcripts of this gene.
-
-        Args:
-            name (str | callable): If a string is given, changes all
-                sequence names to that string. If a callable is given,
-                this callable is applied to the sequence names, which
-                are then set to the returned string.
-        """
-        for key in self._transcripts:
-            self._transcripts[key].rename(name)
-
-    def at(self, position: int) -> FeatureType:
-        """Returns the type of feature at the given position in the
-        Gene. Indexing follows Python convention.
-        """
-        if position < self.start or position >= self.end:
-            raise IndexError(
-                f"Position {position} is out of bounds for Gene at "
-                f"[{self.start}, {self.end})."
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, CDS):
+            raise NotImplementedError(
+                f"Can only compare CDS to CDS, but got {type(other)}"
             )
-        for transcript in self._transcripts.values():
-            if transcript.start <= position < transcript.end:
-                return transcript.at(position)
-        return FeatureType.Unknown
+        return self.start == other.start and self.end == other.end
 
-    def finalize(self) -> None:
-        """Finalizes all transcripts."""
-        for k in self._transcripts:
-            self._transcripts[k].finalize()
+    def __hash__(self) -> int:
+        return hash((self.start, self.end))
 
-    def to_list(self) -> list[GTFEntry]:
-        if len(self._transcripts) == 0:
-            return []
-        gtf = []
-        for tx in sorted(
-            (tx for tx in self),
-            key=lambda x: (x.start, x.end),
-        ):
-            gtf.extend(tx.to_list())
-        gtf.insert(0, GTFEntry(
-            name=gtf[-1].name,
-            source=gtf[-1].source,
-            feature=FeatureType.Gene,
-            start=self.start+1,
-            end=self.end,
-            score=None,
-            strand=gtf[-1].strand,
-            frame=None,
-            attributes=f"gene_id \"{self.id}\";",
+    model_config = {"frozen": False}
+
+
+class Transcript(BaseModel):
+    """Object that represents a collection of coding region."""
+
+    name: str
+    sequence: str
+    strand: Literal["+", "-"]
+    cds: list[CDS]
+
+    @property
+    def start(self) -> int:
+        return self.cds[0].start
+
+    @property
+    def end(self) -> int:
+        return self.cds[-1].end
+
+    def cds_length(self) -> int:
+        """Returns the total length of all coding regions in the
+        transcript combined.
+        """
+        return sum(self.cds_lengths())
+
+    def cds_lengths(self) -> list[int]:
+        """Returns a list of coding region lengths in the transcript."""
+        return [c.end - c.start for c in self.cds]
+
+    def intron_lengths(self) -> list[int]:
+        """Returns a list of lengths of introns in the trancript."""
+        return [
+            self.cds[i+1].start - self.cds[i].end
+            for i in range(len(self.cds)-1)
+        ]
+
+    def classify(self, position: int) -> T_Label | None:
+        if position < self.start or position >= self.end:
+            return None
+        idx = bisect_right([b.start for b in self.cds], position) - 1
+        if idx >= 0 and self.cds[idx].start <= position < self.cds[idx].end:
+            return "cds"
+        return "intron"
+
+    def coding_sequence(self, sequence: Sequence) -> Sequence:
+        """Returns the sequence of nucleotides that corresponds to the
+        coding sequence in this transcript.
+        """
+        if self.sequence != sequence.name:
+            raise KeyError(
+                f"Transcript {self.name!r} is in sequence {self.sequence!r}, "
+                "which does not match the name of the provided sequence "
+                f"{sequence.name!r}."
+            )
+
+        joined = reduce(
+            lambda x, y: x.join(y),
+            [sequence.positions(c.start, c.end) for c in self.cds],
+        )
+        if self.strand == "-":
+            joined = joined.complement(reverse=True)
+
+        return joined
+
+    def protein_sequence(
+        self,
+        sequence: Sequence,
+        *,
+        drop_terminal_stop: bool = True,
+        require_multiple_of_three: bool = False,
+    ) -> str:
+        """Translate the coding region of the transcript into
+        standard-code amino acids. Unknown/ambiguous codons are set to
+        'X' and stop codons are set to '*'.
+
+        Args:
+            drop_terminal_stop (bool, optional): If true, removes a
+                trailing '*' (common convention). Defaults to True.
+            require_multiple_of_three (bool, optional): If true, raises
+                a ValueError if `len(CDS) % 3 != 0`. Defaults to False.
+        """
+        cds = self.coding_sequence(sequence).string()
+        if not cds: return ""
+
+        cds_u = cds.upper().replace("U", "T")
+        if len(cds_u) % 3 != 0:
+            msg = (
+                f"CDS length for transcript {self.name!r} is {len(cds_u)}, "
+                "not a multiple of 3."
+            )
+            if require_multiple_of_three: raise ValueError(msg)
+            warnings.warn(
+                msg + " Truncating trailing nucleotides for translation."
+            )
+            cds_u = cds_u[:3*(len(cds_u)//3)]
+
+        aa = []
+        for i in range(0, len(cds_u), 3):
+            codon = cds_u[i:i+3]
+            # if any ambiguity or non-ACGT, emit X
+            if any(b not in "ACGT" for b in codon):
+                aa.append("X")
+            else:
+                aa.append(_CODON_TABLE.get(codon, "X"))
+
+        prot = "".join(aa)
+        if drop_terminal_stop and prot.endswith("*"):
+            prot = prot[:-1]
+        return prot
+
+    @staticmethod
+    def from_genepred_row(line: str) -> "Transcript":
+        fields = line.rstrip("\n").split("\t")
+        name = fields[0]
+        sequence = fields[1]
+        strand: Literal["+", "-"] = fields[2]  # type: ignore
+        starts = [int(x) for x in fields[8].rstrip(",").split(",")]
+        ends = [int(x) for x in fields[9].rstrip(",").split(",")]
+        cds = sorted(
+            [CDS(start=s, end=e) for s, e in zip(starts, ends)],
+            key=lambda b: b.start,
+        )
+        return Transcript(name=name, sequence=sequence, strand=strand, cds=cds)
+
+    def to_genepred_row(self) -> str:
+        """Serialize to a single GenePred line."""
+        starts = ",".join(str(b.start) for b in self.cds) + ","
+        ends = ",".join(str(b.end) for b in self.cds) + ","
+        return "\t".join([
+            self.name,
+            self.sequence,
+            self.strand,
+            str(self.start),
+            str(self.end),
+            str(self.start),
+            str(self.end),
+            str(len(self.cds)),
+            starts,
+            ends,
+        ])
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Transcript):
+            raise NotImplementedError(
+                "Can only compare Transcript to Transcript, but got "
+                f"{type(other)}"
+            )
+        return (
+            self.sequence == other.sequence and
+            self.strand == other.strand and
+            self.cds == other.cds
+        )
+
+    def __hash__(self) -> int:
+        return hash((
+            self.sequence,
+            self.strand,
+            tuple((c.start, c.end) for c in self.cds),
         ))
-        return gtf
+
+    model_config = {"frozen": False}
+
+
+class SequenceAnnotation:
+
+    def __init__(self, sequence: str) -> None:
+        self.sequence = sequence
+        self._all: list[Transcript] = []
+        self._fwd: list[Transcript] = []
+        self._rev: list[Transcript] = []
+        self._fwd_starts: list[int] = []
+        self._rev_starts: list[int] = []
+        self._fwd_dirty = False
+        self._rev_dirty = False
+
+    def add(self, tx: Transcript) -> None:
+        """Add a new transcript to the annotation."""
+        self._all.append(tx)
+        if tx.strand == "+":
+            self._fwd.append(tx)
+            self._fwd_dirty = True
+        else:
+            self._rev.append(tx)
+            self._rev_dirty = True
+
+    def remove(self, tx: Transcript) -> None:
+        """Remove an already existing transcript from the annotation."""
+        try:
+            self._all.remove(tx)
+        except ValueError:
+            raise KeyError(
+                f"Transcript {tx.name!r} not found in {self.sequence}"
+            )
+        if tx.strand == "+":
+            self._fwd.remove(tx)
+            self._fwd_dirty = True
+        else:
+            self._rev.remove(tx)
+            self._rev_dirty = True
+
+    def _sort_strand(self, strand: str) -> None:
+        if strand == "+":
+            if not self._fwd_dirty: return
+            self._fwd.sort(key=lambda t: t.start)
+            self._fwd_starts = [t.start for t in self._fwd]
+            self._fwd_dirty = False
+        else:
+            if not self._rev_dirty: return
+            self._rev.sort(key=lambda t: t.start)
+            self._rev_starts = [t.start for t in self._rev]
+            self._rev_dirty = False
+
+    def _candidates(self, position: int, strand: str) -> list[Transcript]:
+        self._sort_strand(strand)
+        transcripts, starts = (
+            (self._fwd, self._fwd_starts) if strand == "+"
+            else (self._rev, self._rev_starts)
+        )
+        right = bisect_right(starts, position)
+        return [t for t in transcripts[:right] if t.end > position]
+
+    def _classify_strand(self, position: int, strand: str) -> T_Label:
+        for t in self._candidates(position, strand):
+            label = t.classify(position)
+            if label is not None: return label
+        return "intergenic"
+
+    def classify(self, position: int) -> T_StrandLabel:
+        return (
+            self._classify_strand(position, "+"),
+            self._classify_strand(position, "-"),
+        )
+
+    def classify_range(
+        self,
+        start: int,
+        end: int,
+    ) -> tuple[
+        dict[str, list[tuple[int, int]]],
+        dict[str, list[tuple[int, int]]],
+    ]:
+        return (
+            self._classify_range_strand(start, end, "+"),
+            self._classify_range_strand(start, end, "-"),
+        )
+
+    def _classify_range_strand(
+        self,
+        start: int,
+        end: int,
+        strand: str,
+    ) -> dict[str, list[tuple[int, int]]]:
+        self._sort_strand(strand)
+        transcripts, starts = (
+            (self._fwd, self._fwd_starts) if strand == "+"
+            else (self._rev, self._rev_starts)
+        )
+
+        breakpositions = {start, end}
+        right = bisect_right(starts, end)
+        for t in transcripts[:right]:
+            if t.end < start: continue
+
+            for b in t.cds:
+                if start < b.start < end: breakpositions.add(b.start)
+                if start < b.end < end: breakpositions.add(b.end)
+            if start < t.start < end:
+                breakpositions.add(t.start)
+            if start < t.end < end:
+                breakpositions.add(t.end)
+
+        sorted_bp = sorted(breakpositions)
+        result: dict[str, list[tuple[int, int]]] = defaultdict(list)
+        for i, s in enumerate(sorted_bp[:-1]):
+            e = sorted_bp[i+1] if i+1 < len(sorted_bp) else end
+            label = self._classify_strand(s, strand)
+            result[label].append((s, e))
+        return dict(result)
 
     def __iter__(self) -> Iterator[Transcript]:
-        return iter(list(self._transcripts.values()))
+        return iter(self._all)
 
-    def __getitem__(self, key: str) -> Transcript:
-        return self._transcripts[key]
+    def __len__(self) -> int:
+        return len(self._all)
 
 
 class Annotation:
-    """Class handling the data structures and methods for a one genome
-    annotation file.
+    """Representation of a genome annotation, designed to align with the
+    GenePred file format.
     """
 
     def __init__(self) -> None:
-        self._genes: OrderedDict[str, Gene] = OrderedDict()
-        self._sequences: dict[str, list[str]] = OrderedDict()
+        self._sequences: OrderedDict[str, SequenceAnnotation] = OrderedDict()
 
-    def add(self, entry: GTFEntry) -> None:
-        """Adds the given gtf entry to the gene.
+    def add(self, tx: Transcript) -> None:
+        """Add a new transcript to the annotation."""
+        if tx.sequence not in self:
+            self._sequences[tx.sequence] = SequenceAnnotation(tx.sequence)
+        self._sequences[tx.sequence].add(tx)
 
-        Args:
-            entry (GTFEntry): The entry that should be added to the
-                gene. Can be of any :class:`FeatureType`.
+    def remove(self, tx: Transcript) -> None:
+        """Remove an already existing transcript from the annotation."""
+        self[tx.sequence].remove(tx)
 
-                *Warning*: The ``start`` and ``end`` attribute of the
-                entry has to align with Python indexing, starting at
-                zero and the end is exclusive.
-        """
-        gene_id = entry.attribute("gene_id")
-        if gene_id not in self._genes:
-            self._genes[gene_id] = Gene(gene_id)
-            if entry.name not in self._sequences:
-                self._sequences[entry.name] = []
-            self._sequences[entry.name].append(gene_id)
-        self._genes[gene_id].add(entry)
-
-    def rename(self, name: str | Callable[[str], str]) -> None:
-        """Changes the names of all sequences in this annotation.
-
-        Args:
-            name (str | callable): If a string is given, changes all
-                sequence names to that string. If a callable is given,
-                this callable is applied to the sequence names, which
-                are then set to the returned string.
-        """
-        for key in self._genes:
-            self._genes[key].rename(name)
-
-    def finalize(self) -> None:
-        """Finalizes all transcripts in the annotation."""
-        for gene in self:
-            gene.finalize()
-
-    def remove(self, obj: Transcript | Gene) -> None:
-        """Remove the given transcript or gene from the annotation.
-        Raises an error if it does not exist.
-        """
-        if isinstance(obj, Gene):
-            self._genes.pop(obj.id)
-            self._sequences[obj.seqname].remove(obj.id)
-        elif isinstance(obj, Transcript):
-            self._genes[obj.gene_id]._transcripts.pop(obj.id)
-
-    def clean(
-        self,
-        fasta: "Fasta",
-        inframe_stop_codons: bool = True,
-        min_coding_length: int | None = None,
-        exon_boundaries: bool = False,
-        coding_repeats: bool = False,
-        out_of_bounds: bool = False,
-    ) -> None:
-        """Removes any transcripts that do not meet the given
-        requirements. For fine-grained options, have a look at the
-        corresponding functions in `bricks2marble.tools.post`.
-
-        Args:
-            fasta (Fasta): A fasta is required to be specified for all
-                subsequent arguments.
-            inframe_stop_codons (list[str], optional): Removes all
-                transcripts with inframe stop codons from the
-                annotation. Defaults to True.
-            min_coding_length (int, optional): Minimal length of coding
-                regions. All transcripts with a shorter coding region
-                will be deleted. Defaults to no checks for length.
-            exon_boundaries (bool, optional): Removes transcripts with
-                wrong exon boundaries from the annotation. Is based on
-                the default border codons. Defaults to no action.
-            coding_repeats (bool, optional): Removes transcripts that
-                have coding regions that overlap with repeats. Defaults
-                to no action.
-            out_of_bounds (bool, optional): Removes transcripts that are
-                out-of-bounds for the given fasta. Defaults to no
-                action.
-        """
-        if inframe_stop_codons:
-            from ..tools.post import check_inframe_stop_codons
-            check_inframe_stop_codons(self, fasta, remove=True)
-        if min_coding_length is not None:
-            from ..tools.post import check_min_coding_length
-            check_min_coding_length(self, min_coding_length, remove=True)
-        if exon_boundaries:
-            from ..tools.post import check_exon_boundaries
-            check_exon_boundaries(self, fasta, remove=True)
-        if coding_repeats:
-            from ..tools.post import check_coding_repeats
-            check_coding_repeats(self, fasta, remove=True)
-        if out_of_bounds:
-            from ..tools.post import check_out_of_bounds
-            check_out_of_bounds(self, fasta, remove=True)
-
-    def at(
+    def classify(
         self,
         position: int,
-    ) -> tuple[FeatureType | None, FeatureType | None]:
-        """Returns the type of label at the given position. Can be used
-        to determine whether a position is coding or non-coding.
-
-        Args:
-            position (int): The position to identify. Indexing starts at
-                0, and the last position is exclusive, following Python
-                indexing.
-
-        Returns:
-            tuple: Two feature types for the forward and backward
-            strand.
+        sequence: str | int = 0,
+    ) -> T_StrandLabel:
+        """Return a 2-tuple of labels "cds", "intron" or "intergenic"
+        for forward and reverse strand at the given position and
+        sequence. Positions start at 0 and are end-exclusive. For
+        example, position 1 is the second nucleotide in the genome.
         """
-        fwd = None
-        bwd = None
-        for gene in self:
-            if fwd is not None and bwd is not None: break
-            if gene.start <= position < gene.end:
-                if gene.strand == "+": fwd = gene.at(position)
-                if gene.strand == "-": bwd = gene.at(position)
-        return fwd, bwd
+        return self[sequence].classify(position)
 
-    def select(
+    def classify_range(
         self,
-        sequence: str | None = None,
-        start: int | None = None,
-        end: int | None = None,
-    ) -> None:
-        """Select only specific transcripts from the annotation. Changes
-        the annotation in-place.
-
-        Args:
-            sequence (str, optional): Select only transcripts with the
-                given name.
-            start (int, optional): Select only transcripts that are
-                starting at or after the given position.
-            end (int, optional): Select only transcripts that are
-                ending strictly before the given position.
+        start: int,
+        end: int,
+        sequence: str | int = 0,
+    ) -> tuple[
+        dict[str, list[tuple[int, int]]],
+        dict[str, list[tuple[int, int]]],
+    ]:
+        """Returns two dictionaries ``d`` for forward and reverse
+        strand. Here, ``d[label]=[(s1, e1), ..., (sk, ek)]`` is a
+        collection of regions that are classified as ``label`` ("cds",
+        "intron" or "intergenic").
+        The regions follow Python index conventions.
         """
-        if sequence is not None:
-            drop_keys = []
-            for gid in self._genes:
-                if self._genes[gid].seqname != sequence:
-                    drop_keys.append(gid)
-            for gid in drop_keys:
-                self.remove(self._genes[gid])
+        return self[sequence].classify_range(start, end)
 
-        if start is not None:
-            drop_keys = []
-            for gid in self._genes:
-                if self._genes[gid].start < start:
-                    drop_keys.append(gid)
-            for gid in drop_keys:
-                self.remove(self._genes[gid])
-
-        if end is not None:
-            drop_keys = []
-            for gid in self._genes:
-                if self._genes[gid].end >= end:
-                    drop_keys.append(gid)
-            for gid in drop_keys:
-                self.remove(self._genes[gid])
-
-    def merge(self, annotation: "Annotation") -> None:
-        """Merges this annotation with the given."""
-        for ex_gene in annotation:
-            for gene in self:
-                if (
-                    gene.seqname == ex_gene.seqname
-                    and gene.strand == ex_gene.strand
-                    and gene.start == ex_gene.start
-                    and gene.end == ex_gene.end
-                ): break
-            else: # no break
-                for ex_tx in ex_gene:
-                    for entry in ex_tx.entries:
-                        g_id = entry.attribute("gene_id")
-                        t_id = entry.attribute("transcript_id")
-                        entry.attributes = (
-                            f"gene_id \"merged_{g_id}\"; "
-                            f"transcript_id \"merged_{t_id}\";"
-                        )
-                        self.add(entry)
-
-    def to_list(self) -> list[GTFEntry]:
-        """Returns a list of :class:`GTFEntry` objects."""
-        gtf = []
-        for gene in self:
-            gtf.extend(gene.to_list())
-        return gtf
-
-    def to_gtf(
+    def classify_many(
         self,
-        path: Path | str,
-        mode: Literal["w", "a", "x"] = "w",
-    ) -> None:
-        """Write the annotation in gtf format to the given path.
+        positions: list[int],
+        sequence: str | int = 0,
+    ) -> list[T_StrandLabel]:
+        seq_ann = self[sequence]
+        order = sorted(range(len(positions)), key=lambda i: positions[i])
+        labels: list[T_StrandLabel] = [
+            ("intergenic", "intergenic")
+        ] * len(positions)
+        for i in order: labels[i] = seq_ann.classify(positions[i])
+        return labels
 
-        Args:
-            path (str): Path to the output file, ends with ".gtf".
-            mode (str): Mode in which to open the file. Possible choices
-                are "w", "a" or "x". Defaults to "w".
-        """
-        path = Path(path)
+    def sequences(self) -> list[str]:
+        return list(self._sequences.keys())
 
-        with open(path, mode) as file:
-            out_writer = csv.writer(
-                file,
-                delimiter='\t',
-                quotechar="|",
-                lineterminator='\n',
-            )
-            for line in self.to_list():
-                out_writer.writerow(line.to_list())
+    @classmethod
+    def from_genepred(cls, path: Path | str) -> "Annotation":
+        ann = cls()
+        with open(path) as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith("#"): continue
+                ann.add(Transcript.from_genepred_row(line))
+        return ann
 
-    def extract_to_file(
-        self,
-        target: Literal["coding", "protein"],
-        fasta: "Fasta",
-        path: Path | str,
-        mode: Literal["w", "a", "x"] = "w",
-        line_width: int = 60,
-        header_fn: Callable[[Gene, Transcript], str] | None = None,
-        skip_empty: bool = True
-    ) -> None:
-        """Combine Annotation and Fasta data to write a target sequence
-        to a given file.
-
-        Args:
-            target (str): Can be either "coding" or "protein".
-            fasta (Fasta): Genome Fasta used to extract coding
-                sequences.
-            path (Path | str): Output Fasta path.
-            mode (Literal["w","a","x"], optional): File open mode.
-                Defaults to "w".
-            line_width (int, optional): Wrap sequence to this line width
-                (Fasta style). Defaults to 60.
-            header_fn (callable, optional): Custom header builder. If
-                None, uses:
-                "{gene_id}|{tx_id}|{seqname}:{start}-{end}({strand})".
-            skip_empty (bool, optional): If True, skips empty coding
-                sequences. Defaults to True.
-        """
-        path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-
-        def default_header(g: Gene, tx: Transcript) -> str:
-            return (
-                f"{g.id}|{tx.id}|{g.seqname}:{tx.start}-{tx.end}({g.strand})"
-            )
-        mk_header = header_fn or default_header
-
+    def to_genepred(self, path: Path | str, mode: str = "w") -> None:
         with open(path, mode) as fh:
-            for gene in self:
-                sequence = fasta[gene.seqname]
-                for tx in gene:
-                    if target == "coding":
-                        seq = tx.coding_sequence(sequence).string()
-                    elif target == "protein":
-                        seq = tx.protein_sequence(sequence)
+            for seq_ann in self:
+                for tx in seq_ann:
+                    fh.write(tx.to_genepred_row() + "\n")
 
-                    if skip_empty and (seq is None or len(seq) == 0):
-                        continue
+    def __iter__(self) -> Iterator[SequenceAnnotation]:
+        return iter(self._sequences.values())
 
-                    header = mk_header(gene, tx)
-                    fh.write(f">{header}\n")
-                    if line_width and line_width > 0:
-                        fh.write(
-                            "\n".join(textwrap.wrap(seq, width=line_width))
-                        )
-                        fh.write("\n")
-                    else:
-                        fh.write(seq + "\n")
+    def __contains__(self, sequence: str) -> bool:
+        return sequence in self._sequences
 
-    def in_sequence(self, name: str) -> Generator[Gene, None, None]:
-        """Yields genes in the sequence with given name. If the sequence
-        name does not exist, this yields no genes, but also does not
-        raise an Error.
-        """
-        for i in (self._sequences[name] if name in self._sequences else []):
-            yield self._genes[i]
-
-    def __iter__(self) -> Iterator[Gene]:
-        return iter(list(self._genes.values()))
-
-    def __getitem__(self, key: str) -> Gene:
-        return self._genes[key]
+    def __getitem__(self, sequence: str | int) -> SequenceAnnotation:
+        if isinstance(sequence, int):
+            return list(self._sequences.values())[sequence]
+        if sequence not in self:
+            raise KeyError(f"Sequence {sequence!r} not part of Annotation")
+        return self._sequences[sequence]

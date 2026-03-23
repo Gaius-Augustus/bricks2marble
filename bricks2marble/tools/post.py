@@ -1,7 +1,7 @@
 import numpy as np
 
 from ..io import fasta_from_string
-from ..struct import Annotation, Fasta, FeatureType, Transcript
+from ..struct import Annotation, Fasta, Transcript
 from ..struct.fasta import complement, nucleotides_to_kmers
 
 
@@ -20,8 +20,8 @@ def check_min_coding_length(
             transcripts from the annotation.
     """
     txs = []
-    for gene in annotation:
-        for tx in gene:
+    for sequence in annotation:
+        for tx in sequence:
             if tx.cds_length() < length: txs.append(tx)
 
     if remove:
@@ -57,16 +57,13 @@ def check_inframe_stop_codons(
     txs = []
     for sequence in fasta:
         seq = sequence.flat
-        for gene in annotation.in_sequence(sequence.name):
-            for tx in gene:
-                if tx.cds_length() < 6: continue
-                s = np.r_[
-                    *(seq[cds[0]:cds[1]] for cds in tx.coords(FeatureType.CDS))
-                ]
-                if tx.strand == "-": s = complement(s, reverse=True)
-                s3 = nucleotides_to_kmers(s)[:-1]
+        for tx in annotation[sequence.name]:
+            if tx.cds_length() < 6: continue
+            s = np.r_[*(seq[cds.start:cds.end] for cds in tx.cds)]
+            if tx.strand == "-": s = complement(s, reverse=True)
+            s3 = nucleotides_to_kmers(s)[:-1]
 
-                if np.any(np.isin(s3, c)): txs.append(tx)
+            if np.any(np.isin(s3, c)): txs.append(tx)
 
     if remove:
         for tx in txs: annotation.remove(tx)
@@ -116,7 +113,7 @@ def check_exon_boundaries(
     """
     if start_codons is None: start_codons = {"ATG"}
     if stop_codons is None: stop_codons = {"TAG", "TAA", "TGA"}
-    if intron_begin is None: intron_begin = {"GT"}
+    if intron_begin is None: intron_begin = {"GT", "GC"}
     if intron_end is None: intron_end = {"AG"}
 
     wrong_start = []
@@ -124,9 +121,9 @@ def check_exon_boundaries(
     wrong_begin = []
     wrong_end = []
 
-    for gene in annotation:
-        seq = fasta[gene.seqname]
-        for tx in gene:
+    for seq_anno in annotation:
+        seq = fasta[seq_anno.sequence]
+        for tx in seq_anno:
 
             kmer = (
                 seq.positions(tx.start, tx.start+3) if tx.strand == "+"
@@ -144,28 +141,27 @@ def check_exon_boundaries(
                 wrong_stop.append(tx)
                 continue
 
-            for entry in tx.entries:
-                if entry.feature == FeatureType.Intron:
-                    kmer = (
-                        seq.positions(entry.start, entry.start+2)
-                        if tx.strand == "+" else
-                        seq.positions(
-                            entry.end-2, entry.end,
-                        ).complement(reverse=True)
-                    ).string()
-                    if kmer.upper() not in intron_begin:
-                        wrong_begin.append(tx)
-                        continue
-                    kmer = (
-                        seq.positions(entry.end-2, entry.end)
-                        if tx.strand == "+" else
-                        seq.positions(
-                            entry.start, entry.start+2,
-                        ).complement(reverse=True)
-                    ).string()
-                    if kmer.upper() not in intron_end:
-                        wrong_end.append(tx)
-                        continue
+            for k in range(len(tx.cds)-1):
+                kmer = (
+                    seq.positions(tx.cds[k].end, tx.cds[k].end+2)
+                    if tx.strand == "+" else
+                    seq.positions(
+                        tx.cds[k+1].start-2, tx.cds[k+1].start,
+                    ).complement(reverse=True)
+                ).string()
+                if kmer.upper() not in intron_begin:
+                    wrong_begin.append(tx)
+                    continue
+                kmer = (
+                    seq.positions(tx.cds[k+1].start-2, tx.cds[k+1].start)
+                    if tx.strand == "+" else
+                    seq.positions(
+                        tx.cds[k].end, tx.cds[k].end+2,
+                    ).complement(reverse=True)
+                ).string()
+                if kmer.upper() not in intron_end:
+                    wrong_end.append(tx)
+                    continue
 
     if remove:
         for tx in (wrong_start + wrong_stop + wrong_begin + wrong_end):
@@ -180,9 +176,9 @@ def check_coding_repeats(
     remove: bool = False,
 ) -> list[Transcript]:
     repeats = []
-    for gene in annotation:
-        seq = fasta[gene.seqname]
-        for tx in gene:
+    for seq_anno in annotation:
+        seq = fasta[seq_anno.sequence]
+        for tx in seq_anno:
             if tx.coding_sequence(seq).is_repeat_masked():
                 repeats.append(tx)
     if remove:
@@ -208,9 +204,10 @@ def check_out_of_bounds(
         (list of Transcript): A list of out-of-bounds transcripts.
     """
     txs = []
-    for gene in annotation:
-        for tx in gene:
-            if tx.end > fasta[tx.seqname].size:
+    for seq_anno in annotation:
+        seq = fasta[seq_anno.sequence]
+        for tx in seq_anno:
+            if tx.end > seq.size:
                 txs.append(tx)
     if remove:
         for tx in txs: annotation.remove(tx)

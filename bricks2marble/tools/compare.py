@@ -190,124 +190,45 @@ def compare_gtf(
         )
 
 
-def annotation_diff(
-    annotation1: Annotation,
-    annotation2: Annotation,
-) -> Annotation:
-    """Creates a diff of two annotations. Returns a new annotation that
-    contains all transcripts that are not in both given annotations.
+def annotation_diff(a: Annotation, b: Annotation) -> Annotation:
+    """Returns all transcripts in `a` that are not in `b`. Transcript
+    names are ignored.
     """
-    annotation = Annotation()
-    for gene1 in annotation1:
-        for gene2 in annotation2:
-            if (
-                gene1.seqname == gene2.seqname
-                and gene1.strand == gene2.strand
-                and gene1.start == gene2.start
-                and gene1.end == gene2.end
-            ): break
-        else: # no break
-            for tx in gene1:
-                for entry in tx.entries:
-                    g_id = entry.attribute("gene_id")
-                    t_id = entry.attribute("transcript_id")
-                    entry.attributes = (
-                        f"gene_id \"left_{g_id}\"; "
-                        f"transcript_id \"left_{t_id}\";"
-                    )
-                    annotation.add(entry)
-
-    for gene2 in annotation2:
-        for gene1 in annotation1:
-            if (
-                gene1.seqname == gene2.seqname
-                and gene1.strand == gene2.strand
-                and gene1.start == gene2.start
-                and gene1.end == gene2.end
-            ): break
-        else: # no break
-            for tx in gene2:
-                for entry in tx.entries:
-                    g_id = entry.attribute("gene_id")
-                    t_id = entry.attribute("transcript_id")
-                    entry.attributes = (
-                        f"gene_id \"right_{g_id}\"; "
-                        f"transcript_id \"right_{t_id}\";"
-                    )
-                    annotation.add(entry)
-    return annotation
+    b_transcripts = {tx for chrom_ann in b for tx in chrom_ann}
+    result = Annotation()
+    for chrom_ann in a:
+        for tx in chrom_ann:
+            if tx not in b_transcripts:
+                result.add(tx)
+    return result
 
 
-def annotation_and(
-    annotation1: Annotation,
-    annotation2: Annotation,
-) -> Annotation:
-    """Returns a new annotation that contains all transcripts that are
-    unanimous in both given annotations.
+def annotation_and(a: Annotation, b: Annotation) -> Annotation:
+    """Returns all transcripts present in both `a` and `b`. Transcript
+    names are ignored.
     """
-    annotation = Annotation()
-    for gene1 in annotation1:
-        for gene2 in annotation2:
-            if (
-                gene1.seqname == gene2.seqname
-                and gene1.strand == gene2.strand
-                and gene1.start == gene2.start
-                and gene1.end == gene2.end
-            ):
-                for tx in gene1:
-                    for entry in tx.entries:
-                        annotation.add(entry)
-    return annotation
+    b_transcripts = {tx for chrom_ann in b for tx in chrom_ann}
+    result = Annotation()
+    for chrom_ann in a:
+        for tx in chrom_ann:
+            if tx in b_transcripts:
+                result.add(tx)
+    return result
 
 
-def annotation_or(
-    annotation1: Annotation,
-    annotation2: Annotation,
-) -> Annotation:
-    """Returns a new annotation that contains all transcripts of both
-    given annotations.
+def annotation_or(a: Annotation, b: Annotation) -> Annotation:
+    """Returns all transcripts present in either `a` or `b`, with
+    duplicates removed. Transcript names are ignored.
     """
-    annotation = Annotation()
-    for gene1 in annotation1:
-        for tx in gene1:
-            for entry in tx.entries:
-                g_id = entry.attribute("gene_id")
-                t_id = entry.attribute("transcript_id")
-                entry.attributes = (
-                    f"gene_id \"left_{g_id}\"; "
-                    f"transcript_id \"left_{t_id}\";"
-                )
-                annotation.add(entry)
-
-    for gene2 in annotation2:
-        exists = False
-        for gene in annotation:
-            if (
-                gene.seqname == gene2.seqname
-                and gene.strand == gene2.strand
-                and gene.start > gene2.start
-            ):
-                # overshot, is not there yet
-                break
-            if (
-                gene.seqname == gene2.seqname
-                and gene.strand == gene2.strand
-                and gene.start == gene2.start
-                and gene.end == gene2.end
-            ):
-                exists = True
-                break
-        if not exists:
-            for tx in gene2:
-                for entry in tx.entries:
-                    g_id = entry.attribute("gene_id")
-                    t_id = entry.attribute("transcript_id")
-                    entry.attributes = (
-                        f"gene_id \"right_{g_id}\"; "
-                        f"transcript_id \"right_{t_id}\";"
-                    )
-                    annotation.add(entry)
-    return annotation
+    result = Annotation()
+    seen = set()
+    for ann in (a, b):
+        for chrom_ann in ann:
+            for tx in chrom_ann:
+                if tx not in seen:
+                    seen.add(tx)
+                    result.add(tx)
+    return result
 
 
 def hex_to_rgba(hex_color: str, alpha: float = 0.5) -> str:
