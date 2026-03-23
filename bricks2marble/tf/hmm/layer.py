@@ -13,6 +13,7 @@ from .tools import (emission_parameters, emission_parameters_eye,
                     get_repeats_at_borders_multiplier,
                     get_repeats_emission_distribution, left_right_3mers,
                     state_names, state_start_dist, state_transitions)
+from .transitioner import GeneTransitioner
 
 
 class TransitionScorerConfig(ModelConfig):
@@ -34,8 +35,8 @@ class TransitionScorer(tf.keras.Layer):
         A = softmax(kernel + delta(x))
     ```
 
-    Currently, this layer is only configured for learnable transition
-    matrices with one intron state per frame.
+    Currently, this layer is only configured for transition matrices
+    with one IR, intron and exon state shared across frames.
     """
 
     def __init__(self, **kwargs) -> None:
@@ -64,7 +65,7 @@ class TransitionScorer(tf.keras.Layer):
         )
         self.f1.build(input_shape[:-1] + (self.config.input_size, ))
         self.f2 = tf.keras.layers.Dense(
-            units=7,
+            units=3,
             use_bias=False,
             activation=self.config.out_activation,
             kernel_initializer=tf.keras.initializers.GlorotNormal(),
@@ -72,7 +73,6 @@ class TransitionScorer(tf.keras.Layer):
         self.f2.build(input_shape[:-1] + (d_latent, ))
 
     def call(self, x: tf.Tensor) -> tf.Tensor:
-        B, T, _ = tf.unstack(tf.shape(x))
         if self.config.norm is not None:
             x = self.norm(x)
         scores = self.f2(self.f1(x))
@@ -84,12 +84,7 @@ class TransitionScorer(tf.keras.Layer):
                     tf.sqrt(tf.reduce_sum(scores**2, axis=-1))
                 )
             )
-        return tf.concat((
-            scores[:, :, :4],
-            tf.zeros((B, T, 10), dtype=scores.dtype),
-            scores[:, :, 4:],
-            tf.zeros((B, T, 6), dtype=scores.dtype),
-        ), axis=-1)
+        return scores
 
 
 class AnnotationHMMConfig(ModelConfig):
@@ -133,6 +128,7 @@ class AnnotationHMMConfig(ModelConfig):
     initial_exon_len: int | float | None = None
     initial_intron_len: int | float | list[float | int] | None = None
     initial_ir_len: int | float | None = None
+    transitions_model3: bool = False
     train_transitions: bool = True
     train_start_dist: bool = True
     transitioner_share_noncoding: bool = False
@@ -212,6 +208,13 @@ class AnnotationHMM(tf.keras.Layer):
                 heads=heads,
             )
 
+            if self.config.transitions_model3:
+                hmm.transitioner = GeneTransitioner(
+                    initial_exon_len=float(self.config.initial_exon_len),
+                    initial_intron_len=float(self.config.initial_intron_len),
+                    initial_ir_len=float(self.config.initial_ir_len),
+                )
+
             hmm.transitioner.allow = transitions
             hmm.transitioner.share = share_transitions
             hmm.transitioner.initializer = values_transitions
@@ -262,14 +265,10 @@ class AnnotationHMM(tf.keras.Layer):
                 self.hmm = hmm
 
         if self.config.transition_scorer is not None:
-            if (
-                self.config.transitioner_share_frames
-                or self.config.transitioner_share_noncoding
-                or not self.config.train_transitions
-            ):
+            if not self.config.transitions_model3:
                 raise ValueError(
-                    "Input dependent transitions are currently only"
-                    " implemented for independently trained transitions."
+                    "Input dependent transitions are only supported"
+                    " for 'transitions_model3'."
                 )
             self.transition_scorer = TransitionScorer(
                 **self.config.transition_scorer.model_dump()
