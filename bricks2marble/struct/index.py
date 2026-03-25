@@ -50,7 +50,7 @@ class IndexedFasta:
         return seq_byte_start + i + (i // self.L)
 
     def fetch(self, seq_name: str, *range_: tuple[int, int]) -> Sequence:
-        """Return nucleotides from one or more ranges `[a, b]` from
+        """Return nucleotides from one or more ranges `[a, b)` from
         sequence `seq_name`. Indexing starts at 0 and is end-exclusive.
         """
         if seq_name not in self.index:
