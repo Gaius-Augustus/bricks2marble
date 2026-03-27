@@ -11,6 +11,7 @@ import numpy as np
 from ..io import iterate_sequences
 from ..log import log_it, setup_logging
 from ..struct import CDS, Annotation, Fasta, Region, Sequence, Transcript
+from .types import allowed, convert
 
 HMM_STATE_AGGREGATION = np.array([
     [1., 0., 0., 0., 0.],  # IR
@@ -425,7 +426,7 @@ def _annotate_genome(
             log_it("Calling postprocessing function.")
             group_annotation = postprocess(group, group_annotation)
         log_it("Writing annotation to file.")
-        group_annotation.to_genepred(output, mode="a")
+        convert(group_annotation, output, append=True)
         log_it("Done.")
         first_tx_id = last_tx_id
 
@@ -475,8 +476,9 @@ def annotate_genome(
             the :class:`bricks2marble.tf.HMM`. The first numpy array is
             a prediction on the forward strand, the second a prediction
             on the reverse strand. One of them can be missing.
-        output (Path | str): Path for the output gtf file. Raises an
-            error if the file already exists.
+        output (Path | str): Path for the output annotation file. Raises
+            an error if the file already exists. Possible file formats
+            are ".gtf", ".gff3" and ".gp".
         log_file (Path | str, optional): The file to write a log to.
             Defaults to the same file path as `output`, except with the
             suffix being replaced by `.log`.
@@ -556,6 +558,7 @@ def annotate_genome(
         raise FileExistsError(
             f"The target output path {output} points to an existing file."
         )
+    allowed(Annotation(), output)
     if log_file is None: log_file = output.parent / f"{output.stem}.log"
 
     setup_logging(log_file)

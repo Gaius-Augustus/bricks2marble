@@ -194,6 +194,115 @@ class Transcript(BaseModel):
             ends,
         ])
 
+    def to_gtf_rows(
+        self,
+        source: str = "bricks2marble",
+        gene_id: str | None = None,
+    ) -> str:
+        """Returns GTF rows for this transcript. Coordinates are
+        converted from 0-based half-open to 1-based fully closed. Emits
+        one line each for 'transcript', 'start_codon' and 'stop_codon',
+        then for each block a 'CDS' and 'exon' line, and between
+        consecutive blocks an 'intron' line.
+        """
+        rows = []
+        attributes = f'gene_id "{self.name if gene_id is None else gene_id}";'
+        rows.append("\t".join([
+            self.sequence, source, "gene",
+            str(self.start+1), str(self.end),
+            ".", self.strand, ".", attributes,
+        ]))
+        attributes += f' transcript_id "{self.name}";'
+        rows.append("\t".join([
+            self.sequence, source, "transcript",
+            str(self.start+1), str(self.end),
+            ".", self.strand, ".", attributes,
+        ]))
+
+        first = self.cds[0]
+        last = self.cds[-1]
+        if self.strand == "+":
+            start_codon = (first.start+1, first.start+3)
+            stop_codon  = (last.end-2, last.end)
+        else:
+            start_codon = (last.end-2, last.end)
+            stop_codon  = (first.start+1, first.start+3)
+
+        for feature, (s, e) in (
+            ("start_codon", start_codon), ("stop_codon", stop_codon)
+        ):
+            rows.append("\t".join([
+                self.sequence, source, feature,
+                str(s), str(e),
+                ".", self.strand, "0", attributes,
+            ]))
+
+        cumulative_bases = 0
+        for i, block in enumerate(self.cds):
+            block_length = block.end - block.start
+            frame = (3 - (cumulative_bases % 3)) % 3
+            for feature in ("CDS", "exon"):
+                rows.append("\t".join([
+                    self.sequence, source, feature,
+                    str(block.start+1), str(block.end),
+                    ".", self.strand,
+                    str(frame),
+                    attributes,
+                ]))
+
+            cumulative_bases += block_length
+
+            if i < len(self.cds) - 1:
+                intron_start = block.end + 1
+                intron_end = self.cds[i+1].start
+                rows.append("\t".join([
+                    self.sequence, source, "intron",
+                    str(intron_start), str(intron_end),
+                    ".", self.strand,
+                    str((3 - (cumulative_bases % 3)) % 3),
+                    attributes,
+                ]))
+
+        return "\n".join(rows)
+
+    def to_gff3_rows(self, source: str = "bricks2marble") -> str:
+        """Returns GFF3 rows for this transcript. Coordinates are
+        converted from 0-based half-open to 1-based fully closed.
+        """
+        rows = []
+
+        def child(feature: str, s: int, e: int, frame: str, i: int) -> str:
+            attrs = f"ID={self.name}.{feature}.{i};Parent={self.name}"
+            return "\t".join([
+                self.sequence, source, feature,
+                str(s), str(e),
+                ".", self.strand, frame, attrs,
+            ])
+
+        tx_attrs = f"ID={self.name};Name={self.name}"
+        rows.append("\t".join([
+            self.sequence, source, "mRNA",
+            str(self.start + 1), str(self.end),
+            ".", self.strand, ".", tx_attrs,
+        ]))
+
+        cumulative_bases = 0
+        exon_i = cds_i = 1
+
+        for block in self.cds:
+            block_length = block.end - block.start
+            frame = (3 - (cumulative_bases % 3)) % 3
+            s = block.start + 1
+            e = block.end
+
+            rows.append(child("CDS", s, e, str(frame), cds_i))
+            cds_i += 1
+            rows.append(child("exon", s, e, str(frame), exon_i))
+            exon_i += 1
+            cumulative_bases += block_length
+
+        return "\n".join(rows)
+
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Transcript):
             raise NotImplementedError(
@@ -412,11 +521,41 @@ class Annotation:
                 ann.add(Transcript.from_genepred_row(line))
         return ann
 
-    def to_genepred(self, path: Path | str, mode: str = "w") -> None:
-        with open(path, mode) as fh:
+    def to_genepred(self, path: Path | str, append: bool = False) -> None:
+        with open(path, "a" if append else "w") as fh:
             for seq_ann in self:
                 for tx in seq_ann:
                     fh.write(tx.to_genepred_row() + "\n")
+
+    def to_gtf(
+        self,
+        path: Path | str,
+        source: str = "bricks2marble",
+        append: bool = False,
+    ) -> None:
+        with open(path, "a" if append else "w") as fh:
+            for chrom_ann in self:
+                gene_id = 0
+                for tx in chrom_ann:
+                    gene_id += 1
+                    fh.write(tx.to_gtf_rows(
+                        gene_id=f"g{gene_id}",
+                        source=source,
+                    ) + "\n")
+
+    def to_gff3(
+        self,
+        path: Path | str,
+        source: str = "bricks2marble",
+        append: bool = False,
+    ) -> None:
+        file_exists = Path(path).exists()
+        with open(path, "a" if append else "w") as fh:
+            if not append or not file_exists:
+                fh.write("##gff-version 3\n")
+            for chrom_ann in self:
+                for tx in chrom_ann:
+                    fh.write(tx.to_gff3_rows(source=source) + "\n")
 
     def __iter__(self) -> Iterator[SequenceAnnotation]:
         return iter(self._sequences.values())

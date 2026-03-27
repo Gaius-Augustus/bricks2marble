@@ -7,8 +7,8 @@ from typing import overload
 from pydantic import BaseModel, ValidationError
 
 from ..struct import Annotation
-from .convert import Converter
 from .external import get_tool_path
+from .types import Converter
 
 
 class CompareMetrics(BaseModel):
@@ -107,14 +107,16 @@ def compare_gtf(
         seq_given = False
 
     results = []
-    with Converter(reference, "gtf") as reference_file:
+    with Converter(reference, "gtf", ignore=["gff3"]) as reference_file:
 
         for i in range(len(annotation)):
 
             with tempfile.TemporaryDirectory() as cache_dir_str:
                 cache_dir = Path(cache_dir_str)
 
-                with Converter(annotation[i], "gtf") as cache_file:
+                with Converter(
+                    annotation[i], "gtf", ignore=["gff3"],
+                ) as cache_file:
                     subprocess.run([
                         f"{get_tool_path('gffcompare')}",
                         "--strict-match",
