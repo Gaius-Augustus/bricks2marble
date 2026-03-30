@@ -164,9 +164,10 @@ class Sequence:
     @property
     def evidence(self) -> np.ndarray | None:
         """Evidence is an extra type of information per base position.
-        The given array has to have shape `(self.size, ...)`
+        The given array has to have shape ``(self.size, ...)``.
+        The returned array `self.evidence` will have shape ``(N, T)``.
         """
-        return self._evidence
+        return self._realize_evidence()
 
     @evidence.setter
     def evidence(self, array: np.ndarray | None) -> None:
