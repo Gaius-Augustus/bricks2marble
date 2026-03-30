@@ -12,10 +12,11 @@ from .external import get_tool_path
 
 class Types(Enum):
 
-    ANNOTATION = 0
-    GP = 1
-    GTF = 2
-    GFF3 = 3
+    Annotation = 0
+    gp = 1
+    gtf = 2
+    gff = 3
+    gff3 = 3
 
 
 def _convert_external(
@@ -41,37 +42,37 @@ def _convert_external(
 
 
 ALLOWED: dict[Types, dict] = {
-    Types.ANNOTATION: {
-        Types.GP: lambda i, o, **kwargs: i.to_genepred(
+    Types.Annotation: {
+        Types.gp: lambda i, o, **kwargs: i.to_genepred(
             o,
             append=kwargs.get("append", False),
         ),
-        Types.GTF: lambda i, o, **kwargs: i.to_gtf(
+        Types.gtf: lambda i, o, **kwargs: i.to_gtf(
             o,
             append=kwargs.get("append", False),
             source=kwargs.get("source", "bricks2marble"),
         ),
-        Types.GFF3: lambda i, o, **kwargs: i.to_gff3(
+        Types.gff: lambda i, o, **kwargs: i.to_gff3(
             o,
             append=kwargs.get("append", False),
             source=kwargs.get("source", "bricks2marble"),
         ),
     },
-    Types.GP: {
-        Types.GTF: lambda i, o, **kwargs: load_annotation(i).to_gtf(
+    Types.gp: {
+        Types.gtf: lambda i, o, **kwargs: load_annotation(i).to_gtf(
             o,
             append=kwargs.get("append", False),
             source=kwargs.get("source", "bricks2marble"),
         ),
-        Types.GFF3: lambda i, o, **kwargs: load_annotation(i).to_gff3(
+        Types.gff: lambda i, o, **kwargs: load_annotation(i).to_gff3(
             o,
             append=kwargs.get("append", False),
             source=kwargs.get("source", "bricks2marble"),
         ),
-        Types.ANNOTATION: lambda i, o, **kwargs: load_annotation(i),
+        Types.Annotation: lambda i, o, **kwargs: load_annotation(i),
     },
-    Types.GTF: {
-        Types.GP: lambda i, o, **kwargs: _convert_external(
+    Types.gtf: {
+        Types.gp: lambda i, o, **kwargs: _convert_external(
             i, o, "gtfToGenePred",
         ),
     },
@@ -79,37 +80,35 @@ ALLOWED: dict[Types, dict] = {
 
 
 def _infer_type(obj) -> Types:
-    suffixes = ["gff3", "gtf", "gp"]
-    if isinstance(obj, str):
-        if obj not in suffixes:
-            obj = Path(obj).expanduser()
-            if obj.suffix[1:] not in suffixes:
-                raise ValueError(
-                    f"Unsupported suffix for conversion: {obj.suffix[1:]}. "
-                    f"Supported: {suffixes}"
-                )
+    type_ = None
 
     if isinstance(obj, str):
-        type_ = Types[obj.upper()]
-    elif isinstance(obj, Path):
-        if obj.suffix[1:] not in suffixes:
+        try:
+            type_ = Types[obj]
+        except KeyError:
+            obj = Path(obj).expanduser()
+
+    if isinstance(obj, Path):
+        try:
+            type_ = Types[obj.suffix[1:]]
+        except KeyError:
+            supp = [t for t in Types._member_map_.keys() if t != "Annotation"]
             raise ValueError(
-                f"Unsupported suffix for conversion: {obj.suffix[1:]}. "
-                f"Supported: {suffixes}"
+                f"Unsupported suffix for conversion: {obj}. "
+                f"Supported: {supp}"
             )
-        type_ = Types[obj.suffix[1:].upper()]
-    elif obj is Annotation or isinstance(obj, Annotation):
-        type_ = Types.ANNOTATION
-    else:
-        raise ValueError(
-            f"Cannot determine conversion suffix for type {type(obj)}"
-        )
+
+    if obj is Annotation or isinstance(obj, Annotation):
+        type_ = Types.Annotation
+
+    if type_ is None:
+        raise ValueError(f"Unknown conversion type: {type(obj)}")
     return type_
 
 
 def allowed(
     obj: Annotation | str | Path,
-    to: Path | str | Literal["gp", "gtf", "gff3"] | type[Annotation],
+    to: Path | str | type[Annotation],
     ignore: list[Types] | None = None
 ) -> tuple[Types, Types]:
     from_ = _infer_type(obj)
@@ -153,10 +152,8 @@ class Converter:
     def __init__(
         self,
         obj: Annotation | str | Path,
-        to: Literal["gp", "gtf", "gff3"] | type[Annotation],
-        ignore: list[
-            Literal["gp", "gtf", "gff3"] | type[Annotation]
-        ] | None = None,
+        to: str | type[Annotation],
+        ignore: list[str | type[Annotation]] | None = None,
     ) -> None:
         self.obj = (
             Path(obj).expanduser() if isinstance(obj, (str, Path)) else obj
@@ -171,7 +168,7 @@ class Converter:
         self._out_file = None
         if self.obj_type is self.to_type or self.obj_type in self.ignore:
             return self.obj
-        if self.to_type is not Types.ANNOTATION:
+        if self.to_type is not Types.Annotation:
             fd, self._out_file = tempfile.mkstemp(
                 suffix="."+self.to_type.name.lower(),
             )
@@ -180,7 +177,6 @@ class Converter:
                 out_path = ALLOWED[self.obj_type][self.to_type](
                     self.obj,
                     self._out_file,
-                    False,
                 )
                 out_path = Path(self._out_file)
             except Exception as e:
@@ -194,7 +190,6 @@ class Converter:
             return ALLOWED[self.obj_type][self.to_type](
                 self.obj,
                 self._out_file,
-                False,
             )
 
     def __exit__(self, type, value, traceback):
