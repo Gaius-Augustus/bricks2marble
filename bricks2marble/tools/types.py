@@ -42,18 +42,38 @@ def _convert_external(
 
 ALLOWED: dict[Types, dict] = {
     Types.ANNOTATION: {
-        Types.GP: lambda i, o, a: i.to_genepred(o, append=a),
-        Types.GTF: lambda i, o, a: i.to_gtf(o, append=a),
-        Types.GFF3: lambda i, o, a: i.to_gff3(o, append=a),
+        Types.GP: lambda i, o, **kwargs: i.to_genepred(
+            o,
+            append=kwargs.get("append", False),
+        ),
+        Types.GTF: lambda i, o, **kwargs: i.to_gtf(
+            o,
+            append=kwargs.get("append", False),
+            source=kwargs.get("source", "bricks2marble"),
+        ),
+        Types.GFF3: lambda i, o, **kwargs: i.to_gff3(
+            o,
+            append=kwargs.get("append", False),
+            source=kwargs.get("source", "bricks2marble"),
+        ),
     },
     Types.GP: {
-        # Types.GTF: lambda i, o: _convert_external(i, o, "genePredToGtf"),
-        Types.GTF: lambda i, o, a: load_annotation(i).to_gtf(o, append=a),
-        Types.GFF3: lambda i, o, a: load_annotation(i).to_gff3(o, append=a),
-        Types.ANNOTATION: lambda i, o, a: load_annotation(i),
+        Types.GTF: lambda i, o, **kwargs: load_annotation(i).to_gtf(
+            o,
+            append=kwargs.get("append", False),
+            source=kwargs.get("source", "bricks2marble"),
+        ),
+        Types.GFF3: lambda i, o, **kwargs: load_annotation(i).to_gff3(
+            o,
+            append=kwargs.get("append", False),
+            source=kwargs.get("source", "bricks2marble"),
+        ),
+        Types.ANNOTATION: lambda i, o, **kwargs: load_annotation(i),
     },
     Types.GTF: {
-        Types.GP: lambda i, o, a: _convert_external(i, o, "gtfToGenePred"),
+        Types.GP: lambda i, o, **kwargs: _convert_external(
+            i, o, "gtfToGenePred",
+        ),
     },
 }
 
@@ -106,10 +126,10 @@ def allowed(
 def convert(
     obj: Annotation | str | Path,
     to: Path | str | type[Annotation],
-    append: bool = False,
+    **kwargs,
 ) -> Path | Annotation:
     from_type, to_type = allowed(obj, to)
-    returned = ALLOWED[from_type][to_type](obj, to, append)
+    returned = ALLOWED[from_type][to_type](obj, to, **kwargs)
     return returned if to is Annotation else Path(to)  # type: ignore
 
 

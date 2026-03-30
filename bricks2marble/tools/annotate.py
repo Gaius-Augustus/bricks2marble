@@ -7,10 +7,11 @@ from pathlib import Path
 from typing import Callable, Literal
 
 import numpy as np
+from pydantic import BaseModel
 
 from ..io import iterate_sequences
 from ..log import log_it, setup_logging
-from ..struct import CDS, Annotation, Fasta, Region, Sequence, Transcript
+from ..struct import CDS, Annotation, Fasta, Sequence, Transcript
 from .types import allowed, convert
 
 HMM_STATE_AGGREGATION = np.array([
@@ -30,6 +31,19 @@ HMM_STATE_AGGREGATION = np.array([
     [0., 0., 0., 1., 0.],  # IE2
     [0., 0., 0., 0., 1.],  # Stop
 ])
+
+
+class Region(BaseModel):
+    """Marks a consecutive strip of nucleotides on one strand of a
+    genome. It is used to mark a feature by type in a genome
+    ``(exon, intron, ...)``, without specifying further information.
+    Indexing follows Python conventions.
+    """
+
+    name: Literal["intergenic", "intron", "CDS"]
+    start: int
+    end: int
+    strand: Literal["+", "-"] = "+"
 
 
 def _split_regions(
@@ -75,13 +89,13 @@ def _transcripts_from_regions(
     txs: list[list[Region]] = []
     current_tx: list[Region] = []
     for region in regions:
-        if region.name == 'intergenic':
+        if region.name == "intergenic":
             if current_tx:
                 txs.append(current_tx)
                 current_tx = []
         else:
             current_tx.append(region)
-    if regions[0].name != 'intergenic' and txs:
+    if regions[0].name != "intergenic" and txs:
         txs = txs[1:]
     return txs
 
@@ -202,6 +216,7 @@ def _annotate(
     total_mis_both = 0
 
     shift = 0
+    nuc = fasta.nuc
     for seq_i, seq in enumerate(fasta):
         if labels_fwd is not None:
             mis_fwd = _find_mismatches(
@@ -235,9 +250,10 @@ def _annotate(
         ])
         if mis.size > 0:
             cseq = Sequence(np.concatenate(
-                (fasta.nuc[mis, -repred_t:], fasta.nuc[mis+1, :repred_t]),
+                (nuc[mis, -repred_t:], nuc[mis+1, :repred_t]),
                 axis=-1,
-            ), name=seq.name)
+            ).flatten(), name=seq.name)
+            cseq = cseq.resample(T=fasta.T)
             if concat_strand_to_reprediction:
                 strands = np.r_[
                     np.zeros((len(mis_fwd), 2*repred_t), dtype=np.uint8),
@@ -426,7 +442,7 @@ def _annotate_genome(
             log_it("Calling postprocessing function.")
             group_annotation = postprocess(group, group_annotation)
         log_it("Writing annotation to file.")
-        convert(group_annotation, output, append=True)
+        convert(group_annotation, output, append=True, source=model_name)
         log_it("Done.")
         first_tx_id = last_tx_id
 

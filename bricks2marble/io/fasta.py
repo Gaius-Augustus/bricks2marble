@@ -106,7 +106,7 @@ def fasta_from_string(string: str) -> Fasta:
         np.frombuffer(
             string.encode().translate(translation_table),
             dtype=np.int8,
-        )[np.newaxis, :],
+        ),
         name="seq1",
     )]
     return Fasta(sequences)
@@ -247,10 +247,7 @@ def iterate_sequences(
                 name_sequences.append(idx[k][0])
 
         group = Fasta([Sequence(
-            np.frombuffer(
-                seq.translate(translation_table),
-                dtype=np.int8,
-            )[np.newaxis, :],
+            np.frombuffer(seq.translate(translation_table), dtype=np.int8),
             name=name,
         ) for seq, name in zip(raw_sequences, name_sequences)])
 
@@ -303,10 +300,7 @@ def _load_gz_fasta(
 
     sequences = [
         Sequence(
-            np.frombuffer(
-                seq.translate(translation_table),
-                dtype=np.int8,
-            )[np.newaxis, :],
+            np.frombuffer(seq.translate(translation_table), dtype=np.int8),
             name=name,
         ) for seq, name in zip(raw_sequences, name_sequences)
     ]

@@ -1,3 +1,3 @@
 from .annotation import CDS, Annotation, Transcript
-from .fasta import Fasta, Region, Segment, Sequence
+from .fasta import Fasta, Sequence
 from .index import IndexedFasta
