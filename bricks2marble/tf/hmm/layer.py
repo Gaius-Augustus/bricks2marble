@@ -73,6 +73,7 @@ class TransitionScorer(tf.keras.Layer):
         self.f2.build(input_shape[:-1] + (d_latent, ))
 
     def call(self, x: tf.Tensor) -> tf.Tensor:
+        B, T, _ = tf.unstack(tf.shape(x))
         if self.config.norm is not None:
             x = self.norm(x)
         scores = self.f2(self.f1(x))
@@ -84,7 +85,13 @@ class TransitionScorer(tf.keras.Layer):
                     tf.sqrt(tf.reduce_sum(scores**2, axis=-1))
                 )
             )
-        return scores
+        return tf.concat((
+            scores[:, :, :1],
+            tf.tile(scores[:, :, 1:2], [1, 1, 3]),
+            tf.zeros((B, T, 10), dtype=scores.dtype),
+            tf.tile(scores[:, :, 2:3], [1, 1, 3]),
+            tf.zeros((B, T, 6), dtype=scores.dtype),
+        ), axis=-1)
 
 
 class AnnotationHMMConfig(ModelConfig):
@@ -123,8 +130,10 @@ class AnnotationHMMConfig(ModelConfig):
     repeats_emitter: float | None = None
 
     intron_state_chain: int = 1
+    intron_chain_starts: bool = False
     intron_chain_skips: bool = False
     intron_chain_loop: bool = False
+    intron_chain_transitions: bool = False
     initial_exon_len: int | float | None = None
     initial_intron_len: int | float | list[float | int] | None = None
     initial_ir_len: int | float | None = None
@@ -169,8 +178,10 @@ class AnnotationHMM(tf.keras.Layer):
 
         transitions, values_transitions, share_transitions = state_transitions(
             isc=self.config.intron_state_chain,
+            intron_chain_starts=self.config.intron_chain_starts,
             intron_chain_skips=self.config.intron_chain_skips,
             intron_chain_loop=self.config.intron_chain_loop,
+            intron_chain_transitions=self.config.intron_chain_transitions,
             p_IR=self.config.initial_ir_len,
             p_intron=self.config.initial_intron_len,
             p_exon=self.config.initial_exon_len,
@@ -265,10 +276,10 @@ class AnnotationHMM(tf.keras.Layer):
                 self.hmm = hmm
 
         if self.config.transition_scorer is not None:
-            if not self.config.transitions_model3:
+            if self.config.transitions_model3:
                 raise ValueError(
                     "Input dependent transitions are only supported"
-                    " for 'transitions_model3'."
+                    " for 'transitions_model3=False'."
                 )
             self.transition_scorer = TransitionScorer(
                 **self.config.transition_scorer.model_dump()

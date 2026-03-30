@@ -1,23 +1,11 @@
 from collections.abc import Callable
 
-import numpy as np
 import tensorflow as tf
 from hidten.tf import TFTransitioner
 from hidten.tf.util import T_TFTensor
 
 
 class GeneTransitioner(TFTransitioner):
-
-    _non_trainable_rows = np.array([
-        0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
-        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    ])
 
     def __init__(
         self,
@@ -43,6 +31,17 @@ class GeneTransitioner(TFTransitioner):
             trainable=self.train_transitions,
         )
 
+        self._non_trainable_rows = tf.convert_to_tensor([
+            0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+            1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        ], tf.float32)
+
     def _build_matrix(
         self,
         matrix_activation: Callable[[T_TFTensor], T_TFTensor],
@@ -51,7 +50,7 @@ class GeneTransitioner(TFTransitioner):
         p = tf.sigmoid(
             self.kernel3 + delta if delta is not None else self.kernel3
         )
-        A = tf.concat(([
+        A = tf.concat((tf.convert_to_tensor([
             p[0], 0, 0, 0, 0, 0, 0, 1-p[0], 0, 0, 0, 0, 0, 0, 0,
             0, p[1], 0, 0, 0, 0, 0, 0, 0, 0, 0, 1-p[1], 0, 0, 0,
             0, 0, p[1], 0, 0, 0, 0, 0, 0, 0, 0, 0, 1-p[1], 0, 0,
@@ -59,7 +58,7 @@ class GeneTransitioner(TFTransitioner):
             0, 0, 0, 0, 0, p[2], 0, 0, 1-p[2], 0, 0, 0, 0, 0, 0,
             0, 0, 0, 0, 0, 0, p[2], 0, 0, (1-p[2])/2, 0, 0, 0, 0, (1-p[2])/2,
             0, 0, 0, 0, p[2], 0, 0, 0, 0, 0, 1-p[2], 0, 0, 0, 0,
-        ], self._non_trainable_rows), axis=0)
+        ], tf.float32), self._non_trainable_rows), axis=0)
         A = tf.tile(
             tf.expand_dims(tf.reshape(A, (15, 15)), 0),
             [self.heads, 1, 1],

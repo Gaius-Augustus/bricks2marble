@@ -497,8 +497,10 @@ def state_transitions_simple(
 
 def state_transitions(
     isc: int = 1,
+    intron_chain_starts: bool = False,
     intron_chain_skips: bool = False,
     intron_chain_loop: bool = False,
+    intron_chain_transitions: bool = True,
     p_IR: int | float | None = None,
     p_intron: int | float | list[float | int] | None = None,
     p_exon: int | float | None = None,
@@ -586,16 +588,27 @@ def state_transitions(
         # loops on intron states Ikj -> Ikj
         [k, k] for k in range(1, 3*isc+1)
     ])
-    intron_edges = np.array([
+    intron_edges = (np.array([
         # edges between intron states Ikj -> Ik(j+1)
         [k+j*3, k+(j+1)*3] for j in range(isc-1) for k in range(1, 4)
-    ])
+    ]) if intron_chain_transitions else np.array([]))
     intron_ingoing = np.array([
         # ingoing edges EIk -> Ik0
         [ 8+3*(isc-1), 1],
         [ 9+3*(isc-1), 2],
         [10+3*(isc-1), 3],
     ])
+    if intron_chain_starts:
+        for k in range(1, isc):
+            intron_ingoing = np.r_[
+                intron_ingoing,
+                np.array([
+                    # ingoing edges EIk -> Ikj
+                    [ 8+3*(isc-1), 1+k*3],
+                    [ 9+3*(isc-1), 2+k*3],
+                    [10+3*(isc-1), 3+k*3],
+                ])
+            ]
     if intron_chain_skips:
         intron_outgoing = np.array([
             # outgoing edges Ikj -> IEk
@@ -617,13 +630,10 @@ def state_transitions(
         indices[indices > 0] = indices[indices > 0] + 3*(isc-1)
     n_edges = len(indices)
     if isc > 1:
-        indices = np.r_[
-            indices,
-            intron_loops,
-            intron_edges,
-            intron_ingoing,
-            intron_outgoing,
-        ]
+        indices = np.r_[indices, intron_loops]
+        if intron_chain_transitions:
+            indices = np.r_[indices, intron_edges]
+        indices = np.r_[indices, intron_ingoing, intron_outgoing]
     else:
         indices = np.r_[
             indices,
@@ -651,15 +661,16 @@ def state_transitions(
             for k in range(isc)
         ]
         # edges between intron states
-        + [
+        + ([
             [n_edges+n_intron_loops+k*3,
              n_edges+n_intron_loops+(k+1)*3]
             for k in range(isc-1)
-        ]
+        ] if intron_chain_transitions else [])
         # ingoing edges
         + [
-            [n_edges+n_intron_loops+n_intron_edges,
-             n_edges+n_intron_loops+n_intron_edges+3]
+            [n_edges+n_intron_loops+n_intron_edges+k*3,
+             n_edges+n_intron_loops+n_intron_edges+(k+1)*3]
+            for k in range(isc if intron_chain_starts else 1)
         ]
         # outgoing edges
         + [
@@ -685,11 +696,13 @@ def state_transitions(
             # loops on intron states
             intron_loop_values
             # edges between intron states
-            + ([np.log(1/2) if intron_chain_skips else 0] * (isc-1))
+            + (([np.log(1/2) if intron_chain_skips else 0] * (isc-1))
+               if intron_chain_transitions else [])
             # ingoing edges
-            + [0]
+            + ([np.log(1/isc)] * isc if intron_chain_starts else [0])
             # outgoing edges
-            + ([np.log(1/2)] * (isc-1) if intron_chain_skips else []) + [
+            + ([np.log(1/2) if intron_chain_transitions else 0] * (isc-1)
+               if intron_chain_skips else []) + [
                 np.log(1/2) if intron_chain_loop else 0
             ]
             # chain loop edges
