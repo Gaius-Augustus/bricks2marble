@@ -260,7 +260,7 @@ def _annotate(
                     np.ones((len(mis_bwd), 2*repred_t), dtype=np.uint8),
                     np.ones((len(mis_both), 2*repred_t), dtype=np.uint8)+1,
                 ]
-                cseq.evidence = strands
+                cseq.evidence = strands.flatten()
             repred_seqs.append(cseq)
         shift += seq.N
 
