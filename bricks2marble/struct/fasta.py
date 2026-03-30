@@ -220,11 +220,9 @@ class Sequence:
 
         Args:
             reverse (bool, optional): Also reverses the sequence
-                direction. For this, the sequence needs to be resampled
-                to one chunk only. Defaults to False.
+                direction. Defaults to False.
         """
         s = self.copy()
-        if reverse: s.resample()
         s._sequence = complement(s._sequence, reverse=reverse)
         return s
 
@@ -240,8 +238,7 @@ class Sequence:
 
         This does not create a new sequence but overrides this one.
         """
-        self.resample(self.size)
-        return self
+        return self.resample(None)
 
     def one_hot(
         self,
@@ -420,6 +417,7 @@ class Fasta:
     @property
     def nuc(self) -> np.ndarray:
         """Sequences of encoded nucleotides of shape ``(N, T)``."""
+        self.T  # check for sequence ambiguity
         return np.concatenate([seq.nuc for seq in self])
 
     @property
@@ -428,27 +426,34 @@ class Fasta:
         ``(N, T, ...)``. If one sequence does not contain evidence, the
         returned value is also None.
         """
-        for seq in self:
-            if seq.evidence is None: return None
-        return np.concatenate([seq.evidence for seq in self])  # type: ignore
+        self.T  # check for sequence ambiguity
+        ev = [s.evidence for s in self]
+        ev_none = [e is None for e in ev]
+        if any(ev_none) and not all(ev_none):
+            raise RuntimeError("Ambiguous evidence across sequences")
+        return np.concatenate(ev)  # type: ignore
 
     @property
     def size(self) -> int:
-        return sum(seq.size for seq in self._sequences)
+        return sum(s.size for s in self)
 
     @property
     def N(self) -> int:
-        return self[0].N
+        return sum(s.N for s in self)
 
     @property
-    def T(self) -> int:
-        return self[0].T
+    def T(self) -> int :
+        Ts = {s.T for s in self}
+        if len(Ts) > 1: raise RuntimeError(
+            "Ambiguous chunk length across sequences, call Fasta.resample"
+        )
+        return Ts.pop()
 
     def is_repeat_masked(self) -> bool:
         """Checks if the Fasta has any repeat-masked positions and
         returns a corresponding boolean.
         """
-        return any(seq.is_repeat_masked() for seq in self)
+        return any(s.is_repeat_masked() for s in self)
 
     def complement(self, reverse: bool = False) -> "Fasta":
         """Returns a new fasta with all sequences being complemented.
@@ -466,11 +471,8 @@ class Fasta:
         T: int | None = None,
         drop_remainder: bool = False,
     ) -> "Fasta":
-        """Resamples the :class:`Fasta` object such that each sequence
-        is grouped into chunks of the given length. This can lead to
-        differently padded sequences.
-        This method does not create a new Fasta object but is an
-        in-place operation.
+        """Resamples the :class:`Fasta` object in-place such that each
+        sequence is grouped into chunks of the given length.
 
         Args:
             T (int): The target chunk size.
@@ -478,8 +480,7 @@ class Fasta:
                 last chunk in each sequence, if the sequence has a
                 length not divisable by ``T``. Defaults to False.
         """
-        for seq in self._sequences:
-            seq.resample(T, drop_remainder=drop_remainder)
+        for s in self: s.resample(T, drop_remainder=drop_remainder)
         return self
 
     def one_hot(
