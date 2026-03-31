@@ -116,7 +116,7 @@ class IndexedBGZipFasta:
                 parts += str(self.fasta[seq_name][r[0]:r[1]])
             except FetchError as e:
                 raise IndexError(
-                    f"Index slice {r[0]:r[1]} out of range for sequence "
+                    f"Index slice {r[0]}:{r[1]} out of range for sequence "
                     f"{seq_name!r} of length {self.length(seq_name)}"
                 ) from e
         seq = fasta_from_string(parts)[0]
