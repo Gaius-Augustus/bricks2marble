@@ -80,6 +80,52 @@ class IndexedFasta:
             np.frombuffer(
                 raw_all.translate(self.translation_table),
                 dtype=np.int8,
-            )[np.newaxis, :],
+            ),
             name=name,
         )
+
+    def length(self, seq_name: str) -> int:
+        return self.index[seq_name][2]
+
+    def sequence_names(self) -> list[str]:
+        return list(self.index.keys())
+
+
+class IndexedBGZipFasta:
+    """Class of an indexed Fasta object that only loads required
+    sequence parts into memory. This class works for files compressed
+    using `bgzip` and requires the `pyfaidx` package.
+    """
+
+    def __init__(self, path: Path | str) -> None:
+        try:
+            from pyfaidx import Fasta
+        except ImportError as e:
+            raise ImportError(
+                "Unable to find package pyfaidx. Install it via pip first."
+            ) from e
+
+        self.fasta = Fasta(path)
+
+    def fetch(self, seq_name: str, *range_: tuple[int, int]) -> Sequence:
+        from pyfaidx import FetchError
+        from ..io import fasta_from_string
+        parts = ""
+        for r in range_:
+            try:
+                parts += str(self.fasta[seq_name][r[0]:r[1]])
+            except FetchError as e:
+                raise IndexError(
+                    f"Index slice {r[0]:r[1]} out of range for sequence "
+                    f"{seq_name!r} of length {self.length(seq_name)}"
+                ) from e
+        seq = fasta_from_string(parts)[0]
+        name = seq_name+":"+",".join(map(lambda x: f"{x[0]+1}-{x[1]}", range_))
+        seq.name = name
+        return seq
+
+    def length(self, seq_name: str) -> int:
+        return self.fasta.faidx.index[seq_name].rlen
+
+    def sequence_names(self) -> list[str]:
+        return list(self.fasta.faidx.index.keys())

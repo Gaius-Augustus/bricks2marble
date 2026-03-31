@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from ..log import log_it
-from ..struct.fasta import Fasta, Sequence
+from ..struct import Fasta, IndexedBGZipFasta, IndexedFasta, Sequence
 from .util import index, largest_close_to_divisible_by
 
 
@@ -62,7 +62,7 @@ def load_fasta(
 
 def write_fasta(
     fasta: Fasta,
-    path: Path| str,
+    path: Path | str,
     line_length: int = 80,
     as_gz: bool = False,
 ) -> None:
@@ -87,6 +87,20 @@ def write_fasta(
             translated = translated.decode("utf-8")
             for i in range(0, len(translated), line_length):
                 f.write(translated[i:i+line_length]+"\n")
+
+
+def indexed_fasta(path: Path | str) -> IndexedFasta | IndexedBGZipFasta:
+    """For a given `.fa` or `.fa.gz` file, returns an object that allows
+    retrieval of sequence parts without loading the whole file into
+    memory.
+    A `.fa.gz` file needs to be compressed using `bgzip`. In this case,
+    the implementation depends on the package `pyfaidx`.
+    """
+    path = Path(path)
+
+    if path.suffix == ".gz":
+        return IndexedBGZipFasta(path)
+    return IndexedFasta(path)
 
 
 def fasta_from_string(string: str) -> Fasta:
