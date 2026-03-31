@@ -136,7 +136,7 @@ class Sequence:
     @property
     def codons(self) -> np.ndarray:
         """Flat sequence of encoded codons."""
-        return nucleotides_to_kmers(self.flat)
+        return nucleotides_to_kmers(self.flat.copy())
 
     @property
     def size(self) -> int:

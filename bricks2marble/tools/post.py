@@ -52,12 +52,12 @@ def check_inframe_stop_codons(
     """
     if codons is None: codons = {"TAG", "TAA", "TGA"}
 
-    c = [nucleotides_to_kmers(fasta_from_string(i)[0].flat) for i in codons]
+    c = [fasta_from_string(i)[0].codons for i in codons]
 
     txs = []
-    for sequence in fasta:
-        seq = sequence.flat
-        for tx in annotation[sequence.name]:
+    for seq_anno in annotation:
+        seq = fasta[seq_anno.sequence].flat
+        for tx in seq_anno:
             if tx.cds_length() < 6: continue
             s = np.r_[*(seq[cds.start:cds.end] for cds in tx.cds)]
             if tx.strand == "-": s = complement(s, reverse=True)
