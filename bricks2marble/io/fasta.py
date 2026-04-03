@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from ..log import log_it
-from ..struct.fasta import Fasta, Sequence
+from ..struct import Fasta, IndexedBGZipFasta, IndexedFasta, Sequence
 from .util import index, largest_close_to_divisible_by
 
 
@@ -62,7 +62,7 @@ def load_fasta(
 
 def write_fasta(
     fasta: Fasta,
-    path: Path| str,
+    path: Path | str,
     line_length: int = 80,
     as_gz: bool = False,
 ) -> None:
@@ -89,6 +89,20 @@ def write_fasta(
                 f.write(translated[i:i+line_length]+"\n")
 
 
+def indexed_fasta(path: Path | str) -> IndexedFasta | IndexedBGZipFasta:
+    """For a given `.fa` or `.fa.gz` file, returns an object that allows
+    retrieval of sequence parts without loading the whole file into
+    memory.
+    A `.fa.gz` file needs to be compressed using `bgzip`. In this case,
+    the implementation depends on the package `pyfaidx`.
+    """
+    path = Path(path)
+
+    if path.suffix == ".gz":
+        return IndexedBGZipFasta(path)
+    return IndexedFasta(path)
+
+
 def fasta_from_string(string: str) -> Fasta:
     """Creates a :class:`Fasta` object with a single sequence from a
     continuous string of nucleotides.
@@ -106,7 +120,7 @@ def fasta_from_string(string: str) -> Fasta:
         np.frombuffer(
             string.encode().translate(translation_table),
             dtype=np.int8,
-        )[np.newaxis, :],
+        ),
         name="seq1",
     )]
     return Fasta(sequences)
@@ -247,10 +261,7 @@ def iterate_sequences(
                 name_sequences.append(idx[k][0])
 
         group = Fasta([Sequence(
-            np.frombuffer(
-                seq.translate(translation_table),
-                dtype=np.int8,
-            )[np.newaxis, :],
+            np.frombuffer(seq.translate(translation_table), dtype=np.int8),
             name=name,
         ) for seq, name in zip(raw_sequences, name_sequences)])
 
@@ -303,10 +314,7 @@ def _load_gz_fasta(
 
     sequences = [
         Sequence(
-            np.frombuffer(
-                seq.translate(translation_table),
-                dtype=np.int8,
-            )[np.newaxis, :],
+            np.frombuffer(seq.translate(translation_table), dtype=np.int8),
             name=name,
         ) for seq, name in zip(raw_sequences, name_sequences)
     ]

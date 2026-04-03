@@ -7,10 +7,12 @@ from pathlib import Path
 from typing import Callable, Literal
 
 import numpy as np
+from pydantic import BaseModel
 
 from ..io import iterate_sequences
 from ..log import log_it, setup_logging
-from ..struct import Annotation, Fasta, FeatureType, GTFEntry, Region, Sequence
+from ..struct import CDS, Annotation, Fasta, Sequence, Transcript
+from .types import allowed, convert
 
 HMM_STATE_AGGREGATION = np.array([
     [1., 0., 0., 0., 0.],  # IR
@@ -29,6 +31,19 @@ HMM_STATE_AGGREGATION = np.array([
     [0., 0., 0., 1., 0.],  # IE2
     [0., 0., 0., 0., 1.],  # Stop
 ])
+
+
+class Region(BaseModel):
+    """Marks a consecutive strip of nucleotides on one strand of a
+    genome. It is used to mark a feature by type in a genome
+    ``(exon, intron, ...)``, without specifying further information.
+    Indexing follows Python conventions.
+    """
+
+    name: Literal["intergenic", "intron", "CDS"]
+    start: int
+    end: int
+    strand: Literal["+", "-"] = "+"
 
 
 def _split_regions(
@@ -74,13 +89,13 @@ def _transcripts_from_regions(
     txs: list[list[Region]] = []
     current_tx: list[Region] = []
     for region in regions:
-        if region.name == 'intergenic':
+        if region.name == "intergenic":
             if current_tx:
                 txs.append(current_tx)
                 current_tx = []
         else:
             current_tx.append(region)
-    if regions[0].name != 'intergenic' and txs:
+    if regions[0].name != "intergenic" and txs:
         txs = txs[1:]
     return txs
 
@@ -88,13 +103,11 @@ def _transcripts_from_regions(
 def _annotation_from_dict(
     entries_fwd: dict[str, list[list[Region]]],
     entries_bwd: dict[str, list[list[Region]]],
-    model_name: str = "Model",
     first_tx_id: int = 0,
 ) -> tuple[Annotation, int]:
     annotation = Annotation()
     tx_id = first_tx_id
     for seq in sorted(set(entries_fwd) | set(entries_bwd)):
-        phase = -1
         len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
         len_bwd = 0 if seq not in entries_bwd else len(entries_bwd[seq])
         while len_fwd + len_bwd > 0:
@@ -109,23 +122,16 @@ def _annotation_from_dict(
 
             tx_id += 1
             t_id = f"g{tx_id}.t1"
-            g_id = f"g{tx_id}"
-            phase = 0
-            for r in tx:
-                annotation.add(GTFEntry(
-                    name=seq,
-                    source=model_name,
-                    feature=FeatureType(r.name),
-                    start=r.start,
-                    end=r.end,
-                    score=None,
-                    strand="+" if fwd else "-",
-                    frame=phase,  # type: ignore
-                    attributes=f"gene_id \"{g_id}\"; "
-                                f"transcript_id \"{t_id}\";",
-                ))
-                if r.name == "CDS":
-                    phase = (3 - (r.end - r.start - phase) % 3) % 3
+            # g_id = f"g{tx_id}"
+            annotation.add(Transcript(
+                name=t_id,
+                sequence=seq,
+                strand="+" if fwd else "-",
+                cds=[
+                    CDS(start=r.start, end=r.end)
+                    for r in tx if r.name == "CDS"
+                ],
+            ))
             len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
             len_bwd = 0 if seq not in entries_bwd else len(entries_bwd[seq])
     return annotation, tx_id
@@ -193,7 +199,6 @@ def _annotate(
     ] | None = None,
     reprediction_factor: float = 0.5,
     exon_at_boundary: int | None = None,
-    model_name: str = "Model",
     first_tx_id: int = 0,
     concat_strand_to_reprediction: bool = False,
 ) -> tuple[Annotation, int]:
@@ -211,6 +216,7 @@ def _annotate(
     total_mis_both = 0
 
     shift = 0
+    nuc = fasta.nuc
     for seq_i, seq in enumerate(fasta):
         if labels_fwd is not None:
             mis_fwd = _find_mismatches(
@@ -244,16 +250,17 @@ def _annotate(
         ])
         if mis.size > 0:
             cseq = Sequence(np.concatenate(
-                (fasta.nuc[mis, -repred_t:], fasta.nuc[mis+1, :repred_t]),
+                (nuc[mis, -repred_t:], nuc[mis+1, :repred_t]),
                 axis=-1,
-            ), name=seq.name)
+            ).flatten(), name=seq.name)
+            cseq = cseq.resample(T=fasta.T)
             if concat_strand_to_reprediction:
                 strands = np.r_[
                     np.zeros((len(mis_fwd), 2*repred_t), dtype=np.uint8),
                     np.ones((len(mis_bwd), 2*repred_t), dtype=np.uint8),
                     np.ones((len(mis_both), 2*repred_t), dtype=np.uint8)+1,
                 ]
-                cseq.evidence = strands
+                cseq.evidence = strands.flatten()
             repred_seqs.append(cseq)
         shift += seq.N
 
@@ -334,7 +341,7 @@ def _annotate(
                 labels_bwd[shift:shift+seq.N, :] = lbl_seq.reshape(-1, fasta.T)
             shift += seq.N
 
-    log_it("Forming regions.")
+    log_it("Forming transcripts.")
 
     entries_fwd: dict[str, list[list[Region]]] = {}
     entries_bwd: dict[str, list[list[Region]]] = {}
@@ -358,15 +365,12 @@ def _annotate(
 
         shift += seq.N
 
-    log_it("Creating GTF entries.")
+    log_it("Creating annotation.")
     annotation, last_tx_id = _annotation_from_dict(
         entries_fwd,
         entries_bwd,
-        model_name=model_name,
         first_tx_id=first_tx_id,
     )
-    log_it("Finalizing.")
-    annotation.finalize()
     return annotation, last_tx_id
 
 
@@ -431,7 +435,6 @@ def _annotate_genome(
             repredict_func=repredict_func,
             reprediction_factor=reprediction_factor,
             concat_strand_to_reprediction=concat_strand_to_reprediction,
-            model_name=model_name,
             exon_at_boundary=repredict_exon_at_boundary,
             first_tx_id=first_tx_id,
         )
@@ -439,7 +442,7 @@ def _annotate_genome(
             log_it("Calling postprocessing function.")
             group_annotation = postprocess(group, group_annotation)
         log_it("Writing annotation to file.")
-        group_annotation.to_gtf(output, mode="a")
+        convert(group_annotation, output, append=True, source=model_name)
         log_it("Done.")
         first_tx_id = last_tx_id
 
@@ -489,8 +492,9 @@ def annotate_genome(
             the :class:`bricks2marble.tf.HMM`. The first numpy array is
             a prediction on the forward strand, the second a prediction
             on the reverse strand. One of them can be missing.
-        output (Path | str): Path for the output gtf file. Raises an
-            error if the file already exists.
+        output (Path | str): Path for the output annotation file. Raises
+            an error if the file already exists. Possible file formats
+            are ".gtf", ".gff3" and ".gp".
         log_file (Path | str, optional): The file to write a log to.
             Defaults to the same file path as `output`, except with the
             suffix being replaced by `.log`.
@@ -570,6 +574,7 @@ def annotate_genome(
         raise FileExistsError(
             f"The target output path {output} points to an existing file."
         )
+    allowed(Annotation(), output)
     if log_file is None: log_file = output.parent / f"{output.stem}.log"
 
     setup_logging(log_file)
