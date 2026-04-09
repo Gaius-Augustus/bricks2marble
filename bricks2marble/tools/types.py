@@ -3,7 +3,6 @@ import subprocess
 import tempfile
 from enum import Enum
 from pathlib import Path
-from typing import Literal
 
 from ..io import load_annotation
 from ..struct import Annotation
@@ -19,26 +18,20 @@ class Types(Enum):
     gff3 = 3
 
 
-def _convert_external(
-    path_in: str | Path,
-    path_out: str | Path,
-    tool: str,
+def _gtf_to_genepred(
+    gtf: Path | str,
+    gp: Path | str,
+    extended: bool = False,
+    ignore_groups_without_exons: bool = False,
 ) -> None:
-    tool_path = get_tool_path(tool)
+    gtfToGenePred = get_tool_path("gtfToGenePred")
 
-    if tool == "genePredToGtf":
-        subprocess.run(
-            [tool_path, "file", str(path_in), str(path_out)],
-            check=True,
-            stderr=subprocess.DEVNULL,
-        )
+    args = [str(gtfToGenePred)]
+    if extended: args += ["-genePredExt"]
+    if ignore_groups_without_exons: args += ["-ignoreGroupsWithoutExons"]
+    args += [str(gtf), str(gp)]
 
-    elif tool == "gtfToGenePred":
-        subprocess.run(
-            [tool_path, str(path_in), str(path_out)],
-            check=True,
-            stderr=subprocess.DEVNULL,
-        )
+    subprocess.run(args, check=True, stderr=subprocess.DEVNULL)
 
 
 ALLOWED: dict[Types, dict] = {
@@ -72,9 +65,7 @@ ALLOWED: dict[Types, dict] = {
         Types.Annotation: lambda i, o, **kwargs: load_annotation(i),
     },
     Types.gtf: {
-        Types.gp: lambda i, o, **kwargs: _convert_external(
-            i, o, "gtfToGenePred",
-        ),
+        Types.gp: lambda i, o, **kwargs: _gtf_to_genepred(i, o, **kwargs),
     },
 }
 
@@ -154,6 +145,7 @@ class Converter:
         obj: Annotation | str | Path,
         to: str | type[Annotation],
         ignore: list[str | type[Annotation]] | None = None,
+        **kwargs,
     ) -> None:
         self.obj = (
             Path(obj).expanduser() if isinstance(obj, (str, Path)) else obj
@@ -163,6 +155,7 @@ class Converter:
             _infer_type(t) for t in ignore
         ] if ignore is not None else []
         self.obj_type, self.to_type = allowed(self.obj, self.to, self.ignore)
+        self._convert_kwargs = kwargs
 
     def __enter__(self) -> Annotation | Path:
         self._out_file = None
@@ -177,6 +170,7 @@ class Converter:
                 out_path = ALLOWED[self.obj_type][self.to_type](
                     self.obj,
                     self._out_file,
+                    **self._convert_kwargs,
                 )
                 out_path = Path(self._out_file)
             except Exception as e:
@@ -190,6 +184,7 @@ class Converter:
             return ALLOWED[self.obj_type][self.to_type](
                 self.obj,
                 self._out_file,
+                **self._convert_kwargs,
             )
 
     def __exit__(self, type, value, traceback):
