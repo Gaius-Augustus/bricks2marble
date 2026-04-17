@@ -23,6 +23,7 @@ def configure(**tools) -> None:
     for tool, path in tools.items():
         if tool not in TOOLS:
             raise ValueError(f"{tool!r} is not a recognized tool name")
+        path = Path(path).expanduser()
         _validate_tool(path)
         TOOLS[tool] = path
 
