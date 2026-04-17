@@ -1,9 +1,13 @@
 import shutil
 from pathlib import Path
 
-GFFCOMPARE: Path | None = None
-GENEPREDTOGTF: Path | None = None
-GTFTOGENEPRED: Path | None = None
+TOOLS: dict[str, Path | None] = {
+    "bgzip": None,
+    "tabix": None,
+    "gffcompare": None,
+    "gtfToGenePred": None,
+    "genePredSingleCover": None,
+}
 
 
 def _validate_tool(path: Path) -> None:
@@ -13,40 +17,21 @@ def _validate_tool(path: Path) -> None:
         )
 
 
-def configure(
-    gffcompare: str | Path | None = None,
-    genePredToGtf: str | Path | None = None,
-    gtfToGenePred: str | Path | None = None,
-) -> None:
+def configure(**tools) -> None:
     """Configure paths for external tools used in bricks2marble."""
-    global GFFCOMPARE, GENEPREDTOGTF, GTFTOGENEPRED
-    if gffcompare is not None:
-        gffcompare = Path(gffcompare).expanduser()
-        _validate_tool(gffcompare)
-        GFFCOMPARE = gffcompare
-
-    if genePredToGtf is not None:
-        genePredToGtf = Path(genePredToGtf).expanduser()
-        _validate_tool(genePredToGtf)
-        GENEPREDTOGTF = genePredToGtf
-
-    if gtfToGenePred is not None:
-        gtfToGenePred = Path(gtfToGenePred).expanduser()
-        _validate_tool(gtfToGenePred)
-        GTFTOGENEPRED = gtfToGenePred
+    global TOOLS
+    for tool, path in tools.items():
+        if tool not in TOOLS:
+            raise ValueError(f"{tool!r} is not a recognized tool name")
+        path = Path(path).expanduser()
+        _validate_tool(path)
+        TOOLS[tool] = path
 
 
 def get_tool_path(tool: str) -> Path:
-    global GFFCOMPARE, GENEPREDTOGTF, GTFTOGENEPRED
-    match tool:
-        case "gffcompare":
-            tool_ = GFFCOMPARE
-        case "genePredToGtf":
-            tool_ = GENEPREDTOGTF
-        case "gtfToGenePred":
-            tool_ = GTFTOGENEPRED
-        case _:
-            raise ValueError(f"{tool!r} is not a recognized tool name")
+    if tool not in TOOLS:
+        raise ValueError(f"{tool!r} is not a recognized tool name")
+    tool_ = TOOLS.get(tool)
     if tool_ is None:
         tool_ = shutil.which(tool)
         if tool_ is not None: return Path(tool_)
