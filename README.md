@@ -1,6 +1,9 @@
 # bricks2marble
 
-Pre- and postprocessing tools for deep learning genome seq2seq models in Python.
+- Python structures for nucleotide sequences and genome annotations.
+- Tensorflow implementation of an HMM used for finding genes.
+- Pre- and postprocessing tools for deep learning genome annotation models.
+- Python interfaces for common bioinformatics tools and file format converters.
 
 ## Installation
 
