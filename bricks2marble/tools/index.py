@@ -6,7 +6,11 @@ from .external import get_tool_path
 from .types import Converter
 
 
-def compress_fasta(fasta: Path | str, create_copy: bool = False) -> None:
+def compress_fasta(
+    fasta: Path | str,
+    create_copy: bool = False,
+    threads: int = 1,
+) -> None:
     """Calls `bgzip` to compress the given fasta path.
 
     Args:
@@ -17,18 +21,23 @@ def compress_fasta(fasta: Path | str, create_copy: bool = False) -> None:
             overridden by the `.gz` file.
     """
     bgzip = str(get_tool_path("bgzip"))
+    command = [bgzip, "--threads", str(threads), str(fasta)]
     if create_copy:
         with open(f"{fasta}.gz", "wb") as out:
             subprocess.run(
-                [bgzip, str(fasta), "-c"],
+                command+["-c"],
                 stdout=out,
                 check=True,
             )
     else:
-        subprocess.run([bgzip, str(fasta)], check=True)
+        subprocess.run(command, check=True)
 
 
-def create_genepred_index(gtf: Path | str, single_cover: bool = False) -> None:
+def create_genepred_index(
+    gtf: Path | str,
+    single_cover: bool = False,
+    threads: int = 1,
+) -> None:
     """For a given gtf file, creates an index of the genepred format
     version of this file.
 
@@ -46,6 +55,8 @@ def create_genepred_index(gtf: Path | str, single_cover: bool = False) -> None:
         single_cover (bool, optional): Whether to call also call
             `genePredSingleCover` for choosing only the longest isoforms
             of each transcript from the annotation. Defaults to False.
+        threads (int, optional): Number of threads to use for `bgzip`.
+            Defaults to 1.
     """
     gtf = Path(gtf)
     gp_gz = gtf.parent / (gtf.stem + ".gp.gz")
@@ -70,7 +81,7 @@ def create_genepred_index(gtf: Path | str, single_cover: bool = False) -> None:
                 check=True,
             )
             subprocess.run(
-                [bgzip],
+                [bgzip, "--threads", str(threads)],
                 input=sort_out.stdout,
                 stdout=gp_gz_out,
                 check=True,

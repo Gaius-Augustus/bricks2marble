@@ -136,7 +136,14 @@ def compare(
                     r'^\s*(Missed|Novel) (.+?):[\s/\d.]+\(\s*([\d.]+)%\)'
                 )
 
-                results.append({})
+                results.append({
+                    "base": {"sensitivity": 0, "precision": 0},
+                    "exon": {"sensitivity": 0, "precision": 0},
+                    "intron": {"sensitivity": 0, "precision": 0},
+                    "intron_chain": {"sensitivity": 0, "precision": 0},
+                    "transcript": {"sensitivity": 0, "precision": 0},
+                    "locus": {"sensitivity": 0, "precision": 0},
+                })
                 with open(cache_dir / ".stats", 'r', encoding='utf-8') as file:
                     for line in file.readlines():
                         match = pattern.match(line)

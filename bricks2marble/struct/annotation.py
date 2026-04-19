@@ -518,14 +518,15 @@ class Annotation:
             for line in fh:
                 line = line.strip()
                 if not line or line.startswith("#"): continue
-                ann.add(Transcript.from_genepred_row(line))
+                tx = Transcript.from_genepred_row(line)
+                if len(tx.cds) > 0: ann.add(tx)
         return ann
 
     def to_genepred(self, path: Path | str, append: bool = False) -> None:
         with open(path, "a" if append else "w") as fh:
             for seq_ann in self:
                 for tx in seq_ann:
-                    fh.write(tx.to_genepred_row() + "\n")
+                    if len(tx.cds) > 0: fh.write(tx.to_genepred_row() + "\n")
 
     def to_gtf(
         self,
