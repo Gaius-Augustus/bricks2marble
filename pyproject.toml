@@ -4,20 +4,22 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bricks2marble"
-version = "0.1.0"
+version = "1.0.0"
 authors = [
   { name="Richard Krieg", email="irkri@irkri.net" },
+  { name="Lars Gabriel", email="lgabriel23@gmx.de" },
+  { name="Mario Stanke", email="mario.stanke@uni-greifswald.de" },
 ]
-description = "Pre- and postprocessing tools for deep learning genome seq2seq models in Python."
+description = "Pre- and postprocessing tools for genome annotation."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
-dependencies = ["numpy", "pydantic", "plotly"]
+dependencies = ["numpy", "pydantic"]
 
 [project.optional-dependencies]
-test = ["pytest"]
 tf = ["hidten"]
+plot = ["plotly"]
 
 [project.urls]
 Homepage = "https://github.com/gaius-augustus/bricks2marble"

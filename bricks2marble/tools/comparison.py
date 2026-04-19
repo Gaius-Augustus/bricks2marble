@@ -40,20 +40,20 @@ class AnnotationComparison(BaseModel):
 
 
 @overload
-def compare_gtf(
+def compare(
     annotation: Annotation | Path | str,
     reference: Annotation | Path | str,
     e: int = ...,
 ) -> AnnotationComparison:
     ...
 @overload
-def compare_gtf(
+def compare(
     annotation: list[Annotation | Path | str],
     reference: Annotation | Path | str,
     e: int = ...,
 ) -> list[AnnotationComparison]:
     ...
-def compare_gtf(
+def compare(
     annotation: Annotation | Path | str | list[Annotation | Path | str],
     reference: Annotation | Path | str,
     e: int = 0,

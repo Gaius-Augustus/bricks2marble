@@ -7,7 +7,7 @@ from plotly import graph_objects as go
 from plotly.subplots import make_subplots
 from plotly.validator_cache import ValidatorCache
 
-from .compare import AnnotationComparison
+from .comparison import AnnotationComparison
 
 
 def hex_to_rgba(hex_color: str, alpha: float = 0.5) -> str:
