@@ -87,8 +87,7 @@ def create_genepred_index(
                 check=True,
             )
         subprocess.run(
-            [tabix, "-p", "gff", "-s", "2", "-b", "4", "-e", "5", "-c", "#",
-             gp_gz],
+            [tabix, "-s", "2", "-b", "4", "-e", "5", "-c", "#", gp_gz],
             check=True,
         )
 
@@ -98,16 +97,17 @@ def tabix_query(
     sequence: str,
     start: int,
     end: int,
-) -> Generator[str, None, None]:
+) -> Generator[list[str], None, None]:
     """Call tabix and generate an array of strings for each line it
-    returns. The indexing is converted to support the Python convention
-    (0-based, end-exclusive).
+    returns. The indexing matches Python conventions (0-based,
+    end-exclusive).
     """
     query = "{}:{}-{}".format(sequence, start, end)
     process = subprocess.run(
         ["tabix", "-f", file, query],
         capture_output=True,
         check=True,
+        text=True,
     )
-    for line in process.stdout:
+    for line in process.stdout.splitlines():
         yield line.strip().split()
