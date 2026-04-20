@@ -102,9 +102,10 @@ def tabix_query(
     returns. The indexing matches Python conventions (0-based,
     end-exclusive).
     """
+    tabix = str(get_tool_path("tabix"))
     query = "{}:{}-{}".format(sequence, start, end)
     process = subprocess.run(
-        ["tabix", "-f", file, query],
+        [tabix, "-f", file, query],
         capture_output=True,
         check=True,
         text=True,
