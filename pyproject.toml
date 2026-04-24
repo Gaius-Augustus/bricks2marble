@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bricks2marble"
-version = "1.0.0"
+version = "0.0.1"
 authors = [
   { name="Richard Krieg", email="irkri@irkri.net" },
   { name="Lars Gabriel", email="lgabriel23@gmx.de" },
@@ -18,7 +18,7 @@ license-files = ["LICENSE"]
 dependencies = ["numpy", "pydantic"]
 
 [project.optional-dependencies]
-tf = ["hidten"]
+tf = ["hidten[tensorflow]"]
 plot = ["plotly"]
 
 [project.urls]

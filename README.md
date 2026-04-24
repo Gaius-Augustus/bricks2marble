@@ -120,7 +120,7 @@ b2m.tools.convert(annotation, "my_annotation.gff", source="MyTool")
 
 This project is licensed under the [MIT license](/LICENSE).
 
-## Tools using bricks2marble
+## Projects using bricks2marble
 
 - [Tiberius: End-to-End Deep Learning with an HMM for Gene
    Prediction](https://github.com/Gaius-Augustus/Tiberius)
