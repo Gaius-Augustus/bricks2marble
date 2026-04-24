@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bricks2marble"
-version = "0.0.1"
+version = "0.0.3"
 authors = [
   { name="Richard Krieg", email="irkri@irkri.net" },
   { name="Lars Gabriel", email="lgabriel23@gmx.de" },
@@ -15,11 +15,10 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
-dependencies = ["numpy", "pydantic"]
+dependencies = ["numpy", "pydantic", "plotly"]
 
 [project.optional-dependencies]
 tf = ["hidten[tensorflow]"]
-plot = ["plotly"]
 
 [project.urls]
 Homepage = "https://github.com/gaius-augustus/bricks2marble"

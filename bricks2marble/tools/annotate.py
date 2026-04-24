@@ -256,9 +256,9 @@ def _annotate(
             cseq = cseq.resample(T=fasta.T)
             if concat_strand_to_reprediction:
                 strands = np.r_[
-                    np.zeros((len(mis_fwd), 2*repred_t), dtype=np.uint8),
-                    np.ones((len(mis_bwd), 2*repred_t), dtype=np.uint8),
-                    np.ones((len(mis_both), 2*repred_t), dtype=np.uint8)+1,
+                    np.zeros((len(mis_fwd), 2*repred_t), dtype=np.int8),
+                    np.ones((len(mis_bwd), 2*repred_t), dtype=np.int8),
+                    np.ones((len(mis_both), 2*repred_t), dtype=np.int8)+1,
                 ]
                 cseq.evidence = strands.flatten()
             repred_seqs.append(cseq)
