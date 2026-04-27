@@ -1,13 +1,29 @@
 from collections.abc import Sequence
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
-import plotly.express as px
-from plotly import graph_objects as go
-from plotly.subplots import make_subplots
-from plotly.validator_cache import ValidatorCache
+
+try:
+    import plotly.express as px
+    from plotly import graph_objects as go
+    from plotly.subplots import make_subplots
+    from plotly.validator_cache import ValidatorCache
+    PLOTLY_AVAIL = True
+except ImportError:
+    PLOTLY_AVAIL = False
 
 from .comparison import AnnotationComparison
+
+if TYPE_CHECKING:
+    from plotly import graph_objects as go
+
+
+def _require_plotly():
+    if not PLOTLY_AVAIL:
+        raise ImportError(
+            "plotly is required for bricks2marble.tools.plot. "
+            "Install it with: pip install bricks2marble[plot]"
+        )
 
 
 def hex_to_rgba(hex_color: str, alpha: float = 0.5) -> str:
@@ -18,7 +34,7 @@ def hex_to_rgba(hex_color: str, alpha: float = 0.5) -> str:
     return f"rgba({r},{g},{b},{alpha})"
 
 
-def plot_comparison(
+def comparison(
     metrics: Sequence[AnnotationComparison],
     labels: Sequence[str] | None = None,
     zoom: bool = True,
@@ -26,7 +42,8 @@ def plot_comparison(
     missing_novel: bool = False,
     table: bool = False,
     f1_curve: bool = True,
-) -> go.Figure:
+) -> "go.Figure":
+    _require_plotly()
     keys = ["base", "intron", "transcript", "exon", "intron_chain", "locus"]
     fig = make_subplots(
         rows=2 + (1 if missing_novel else 0) + (1 if table else 0),
@@ -274,7 +291,7 @@ def plot_comparison(
     return fig
 
 
-def plot_comparison_changes(
+def comparison_changes(
     metrics: Sequence[Sequence[AnnotationComparison]],
     label_species: Sequence[str] | None = None,
     label_tools: Sequence[str] | None = None,
@@ -284,7 +301,8 @@ def plot_comparison_changes(
     include: list[Literal[
         "base", "intron", "transcript", "exon", "intron_chain", "locus"
     ]] | None = None,
-) -> go.Figure:
+) -> "go.Figure":
+    _require_plotly()
     keys = include if include is not None else [
         "base", "intron", "transcript", "exon", "intron_chain", "locus"
     ]

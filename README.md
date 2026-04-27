@@ -34,9 +34,9 @@ behaviour and several optional arguments in detail.
 
 ### Reading and writing
 
-Loading large fasta files is implemented efficiently using bytearray translation tables (~11 seconds
-for the human genome).
-Additionally, `mmap` is used for indexing large fasta files (~4 seconds for the human genome).
+Loading large fasta files is implemented efficiently using bytearray translation tables (~11
+seconds for the human genome). Additionally, `mmap` is used for indexing large fasta files (~4
+seconds for the human genome).
 
 ```python
 import bricks2marble as b2m
@@ -88,7 +88,7 @@ comparison = b2m.tools.compare(
     e=3,
 )
 print(comparison[0].locus.sensitivity)
-fig = b2m.tools.plot_comparison(
+fig = b2m.tools.plot.comparison(
     comparison,
     labels=["My", "Other"],
     table=True,
@@ -101,7 +101,8 @@ fig.show()
 Convert various file formats for genome annotations. The internal `bricks2marble` representation of
 annotation files is closely related to the `genepred` format. Conversions to `gtf` and `gff3` are
 implemented directly. Conversions from these formats to `genepred` are handled by the corresponding
-[external tools from UCSC](https://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/), like `gtfToGenePred`.
+[external tools from UCSC](https://hgdownload.soe.ucsc.edu/admin/exe/linux.x86_64/), like
+`gtfToGenePred`.
 
 ```python
 import bricks2marble as b2m

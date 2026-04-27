@@ -1,14 +1,15 @@
+import textwrap
 import warnings
 from bisect import bisect_right
 from collections import OrderedDict, defaultdict
 from collections.abc import Iterator
 from functools import reduce
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 from pydantic import BaseModel
 
-from .fasta import Sequence
+from .fasta import Fasta, Sequence
 
 _CODON_TABLE = {
     "TTT": "F", "TTC": "F", "TTA": "L", "TTG": "L",
@@ -558,6 +559,65 @@ class Annotation:
                 for tx in chrom_ann:
                     fh.write(tx.to_gff3_rows(source=source) + "\n")
 
+    def sequence_to_file(
+        self,
+        target: Literal["coding", "protein"],
+        fasta: "Fasta",
+        path: Path | str,
+        mode: str = "w",
+        line_width: int = 60,
+        header_fn: Callable[[int, Transcript], str] | None = None,
+        skip_empty: bool = True,
+    ) -> None:
+        """For a given :class:`Fasta` object, write the coding or
+        protein sequence to a given file that corresponds to this
+        annotation.
+
+        Args:
+            target (str): Can be either "coding" or "protein".
+            fasta (Fasta): Genome Fasta used to extract coding
+                sequences.
+            path (Path | str): Output Fasta path.
+            mode (str, optional): Mode for opening the file to write the
+                sequence to. Defaults to "w".
+            line_width (int, optional): Wrap sequence to this line width
+                (Fasta style). Defaults to 60.
+            header_fn (callable, optional): Custom header builder. If
+                None, uses:
+                "{gene_id}|{tx_id}|{seqname}:{start}-{end}({strand})".
+            skip_empty (bool, optional): If True, skips empty coding
+                sequences. Defaults to True.
+        """
+        path = Path(path).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        def default_header(gid: int, tx: Transcript) -> str:
+            return (
+                f"g{gid}|{tx.name}|{tx.sequence}"
+                f":{tx.start}-{tx.end}({tx.strand})"
+            )
+        mk_header = header_fn or default_header
+
+        with open(path, mode) as fh:
+            for seqanno in self:
+                sequence = fasta[seqanno.sequence]
+                gene_id = 0
+                for tx in seqanno:
+                    gene_id += 1
+                    if target == "coding":
+                        seq = tx.coding_sequence(sequence).string()
+                    elif target == "protein":
+                        seq = tx.protein_sequence(sequence)
+
+                    if skip_empty and (seq is None or len(seq) == 0): continue
+
+                    header = mk_header(gene_id, tx)
+                    fh.write(f">{header}\n")
+                    if line_width and line_width > 0: fh.write(
+                        "\n".join(textwrap.wrap(seq, width=line_width)) + "\n"
+                    )
+                    else: fh.write(seq + "\n")
+
     def __iter__(self) -> Iterator[SequenceAnnotation]:
         return iter(self._sequences.values())
 
@@ -568,5 +628,5 @@ class Annotation:
         if isinstance(sequence, int):
             return list(self._sequences.values())[sequence]
         if sequence not in self:
-            raise KeyError(f"Sequence {sequence!r} not part of Annotation")
+            raise KeyError(f"Sequence {sequence!r} is not part of Annotation")
         return self._sequences[sequence]
