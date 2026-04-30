@@ -208,6 +208,24 @@ def get_introns_emission_distribution(
     ``0`` = outside region, ``1`` = interior, ``2`` = left border,
     ``3`` = right border.
 
+    The ``outside`` column is compensated so that, after the row-softmax
+    applied by ``TFCategoricalEmitter`` (see ``hidten.tf.util.zero_row_softmax``),
+    every state emits the ``outside`` class with the same probability
+    ``1/4``. Without this compensation the boosted rows
+    ``[1, f, 1, 1]`` would softmax to ``1/(3+f)`` at the outside column —
+    smaller than the ``1/4`` of the unboosted rows — so the emitter
+    would silently *depress* intron-related states by a factor of
+    ``4/(3+f)`` at every position outside any hint region. That factor
+    compounds across the whole genome and effectively forbids the HMM
+    from placing introns away from hints.
+
+    With the compensation each boosted row becomes
+    ``[(f+2)/3, f, 1, 1]`` (or with ``f`` in the donor / acceptor column
+    instead). Each row then sums to ``4*(f+2)/3``, so the row-softmax
+    gives ``1/4`` at the outside column and ``3*f / (4*(f+2))`` at the
+    boosted column — preserving the boost inside hint regions while
+    leaving outside positions unaffected.
+
     Returns:
         np.ndarray: Array of shape ``(heads, 12+3*isc, 4)``, where
             ``isc`` is the intron_state_chain argument.
@@ -218,6 +236,10 @@ def get_introns_emission_distribution(
     emission[1:1+3*isc, 1] = f
     emission[5+3*isc:8+3*isc, 2] = f
     emission[8+3*isc:11+3*isc, 3] = f
+    outside_compensation = (f + 2.0) / 3.0
+    emission[1:1+3*isc, 0] = outside_compensation
+    emission[5+3*isc:8+3*isc, 0] = outside_compensation
+    emission[8+3*isc:11+3*isc, 0] = outside_compensation
     emission = np.repeat(emission[np.newaxis, ...], repeats=heads, axis=0)
     return emission
 
