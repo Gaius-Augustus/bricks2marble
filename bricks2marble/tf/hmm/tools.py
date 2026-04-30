@@ -244,6 +244,68 @@ def get_introns_emission_distribution(
     return emission
 
 
+def get_codon_emission_distribution(
+    f: float,
+    intron_state_chain: int = 1,
+    heads: int = 1,
+) -> np.ndarray:
+    """Generates an emission probability matrix for encoding start- and
+    stop-codon hints as a single categorical observation. The 7-class
+    one-hot input is
+
+    ``0`` = outside any codon hint
+    ``1`` = start codon, position 1   ->  boosts ``START``
+    ``2`` = start codon, position 2   ->  boosts ``E1``
+    ``3`` = start codon, position 3   ->  boosts ``E2``
+    ``4`` = stop codon,  position 1   ->  boosts ``E0``
+    ``5`` = stop codon,  position 2   ->  boosts ``E1``
+    ``6`` = stop codon,  position 3   ->  boosts ``STOP``
+
+    The ``outside`` column of every boosted row is compensated so that,
+    after the row-softmax applied by ``TFCategoricalEmitter``, every
+    state emits the ``outside`` class with the same probability ``1/7``.
+    Without this compensation boosted rows would soft-depress their
+    intended states everywhere outside any codon hint, which compounds
+    across the genome and effectively forbids the HMM from emitting
+    ``START`` / ``STOP`` (and the trailing exon nucleotides) anywhere
+    except at hinted positions.
+
+    Two compensation values are needed because ``E1`` is boosted twice
+    (it appears at position 2 of both start and stop codons), so its
+    row sums to ``c2 + 2f + 4`` while every other boosted row sums to
+    ``c1 + f + 5``. Solving for outside-softmax = 1/7 gives
+    ``c1 = (f + 5) / 6`` and ``c2 = (2f + 4) / 6 = (f + 2) / 3``.
+
+    Returns:
+        np.ndarray: Array of shape ``(heads, 12+3*isc, 7)``.
+    """
+    isc = intron_state_chain
+    n_states = 12 + 3*isc
+    emission = np.ones((n_states, 7), dtype=np.float32)
+
+    E0_idx    = 1 + 3*isc
+    E1_idx    = 2 + 3*isc
+    E2_idx    = 3 + 3*isc
+    START_idx = 4 + 3*isc
+    STOP_idx  = 11 + 3*isc
+
+    emission[START_idx, 1] = f
+    emission[E1_idx,    2] = f
+    emission[E2_idx,    3] = f
+    emission[E0_idx,    4] = f
+    emission[E1_idx,    5] = f
+    emission[STOP_idx,  6] = f
+
+    c1 = (f + 5.0) / 6.0
+    c2 = (f + 2.0) / 3.0
+    for s in (START_idx, E2_idx, E0_idx, STOP_idx):
+        emission[s, 0] = c1
+    emission[E1_idx, 0] = c2
+
+    emission = np.repeat(emission[np.newaxis, ...], repeats=heads, axis=0)
+    return emission
+
+
 def get_nuc_emission_distribution(
     start_codons: list[tuple[str, float]],
     stop_codons: list[tuple[str, float]],

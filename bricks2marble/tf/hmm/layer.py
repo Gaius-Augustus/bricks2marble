@@ -9,6 +9,7 @@ from ..loss import (IntronParameterRegularizer, IRIntronRatioRegularizer,
                     RepeatsNonCodingRegularizer,
                     UncertainPredictionRegularizer)
 from .tools import (emission_parameters, emission_parameters_eye,
+                    get_codon_emission_distribution,
                     get_introns_emission_distribution,
                     get_nuc_emission_distribution,
                     get_repeats_at_borders_multiplier,
@@ -135,6 +136,15 @@ class AnnotationHMMConfig(ModelConfig):
     first / last position of each region the donor / acceptor splice-
     site states are up-scaled instead. Expects three additional channels
     (``interior, left_border, right_border``) appended to ``nuc``."""
+    codon_hint_emitter: float | None = None
+    """Up-scales the emission probability of the start- and stop-codon
+    states by this factor inside codon-hint regions provided through
+    the input. Expects six additional channels appended to ``nuc``:
+    ``(start_p1, start_p2, start_p3, stop_p1, stop_p2, stop_p3)`` where
+    ``p1``/``p2``/``p3`` are the three nucleotide positions of the
+    codon in 5'→3' order. The boosted states are
+    ``START``/``E1``/``E2`` for the three start-codon positions and
+    ``E0``/``E1``/``STOP`` for the three stop-codon positions."""
 
     intron_state_chain: int = 1
     intron_chain_starts: bool = False
@@ -169,6 +179,10 @@ class AnnotationHMMConfig(ModelConfig):
     @property
     def intron_hints_in_nuc(self) -> bool:
         return self.intron_hint_emitter is not None
+
+    @property
+    def codon_hints_in_nuc(self) -> bool:
+        return self.codon_hint_emitter is not None
 
     @property
     def n_states(self) -> int:
@@ -221,6 +235,12 @@ class AnnotationHMM(tf.keras.Layer):
         if self.config.intron_hint_emitter is not None:
             emissions_intron_hint = get_introns_emission_distribution(
                 self.config.intron_hint_emitter,
+                intron_state_chain=self.config.intron_state_chain,
+                heads=heads,
+            )
+        if self.config.codon_hint_emitter is not None:
+            emissions_codon_hint = get_codon_emission_distribution(
+                self.config.codon_hint_emitter,
                 intron_state_chain=self.config.intron_state_chain,
                 heads=heads,
             )
@@ -292,6 +312,12 @@ class AnnotationHMM(tf.keras.Layer):
                 intron_hint_emitter.initializer = emissions_intron_hint.flatten()
                 intron_hint_emitter.trainable = False
                 hmm.add_emitter(intron_hint_emitter)
+
+            if self.config.codon_hint_emitter is not None:
+                codon_hint_emitter = TFCategoricalEmitter()
+                codon_hint_emitter.initializer = emissions_codon_hint.flatten()
+                codon_hint_emitter.trainable = False
+                hmm.add_emitter(codon_hint_emitter)
 
             if self.config.compute_heads_sequentially:
                 self.hmm.append(hmm)
@@ -382,6 +408,8 @@ class AnnotationHMM(tf.keras.Layer):
                 build_shape = build_shape + (input_shape[:-1] + (2, ), )
             if self.config.intron_hint_emitter is not None:
                 build_shape = build_shape + (input_shape[:-1] + (4, ), )
+            if self.config.codon_hint_emitter is not None:
+                build_shape = build_shape + (input_shape[:-1] + (7, ), )
             hmm.build(build_shape)
 
         if self.config.intron_regularization > 0:
@@ -418,11 +446,17 @@ class AnnotationHMM(tf.keras.Layer):
         tf.Tensor | None,
         tf.Tensor | None,
         tf.Tensor | None,
+        tf.Tensor | None,
     ]:
         r = None
         ih = None
+        ch = None
         nbases = 4 if self.config.uniform_N else 5
-        if self.config.repeats_in_nuc or self.config.intron_hints_in_nuc:
+        if (
+            self.config.repeats_in_nuc
+            or self.config.intron_hints_in_nuc
+            or self.config.codon_hints_in_nuc
+        ):
             offset = nbases
             if self.config.repeats_in_nuc:
                 r = nuc[..., offset:offset+1]
@@ -430,6 +464,9 @@ class AnnotationHMM(tf.keras.Layer):
             if self.config.intron_hints_in_nuc:
                 ih = nuc[..., offset:offset+3]
                 offset += 3
+            if self.config.codon_hints_in_nuc:
+                ch = nuc[..., offset:offset+6]
+                offset += 6
             nuc = nuc[..., :nbases]
         if self.config.use_reverse_strand:
             nuc_reverse = tf.gather(
@@ -455,7 +492,17 @@ class AnnotationHMM(tf.keras.Layer):
                 ih = tf.concat((ih, ih_rev), axis=0)
             outside = 1.0 - tf.reduce_sum(ih, axis=-1, keepdims=True)
             ih = tf.concat((outside, ih), axis=-1)
-        return x, nuc, r, transition_scores, ih
+        if self.config.codon_hint_emitter is not None:
+            if self.config.use_reverse_strand:
+                ch_rev = tf.reverse(ch, [1])
+                # Within each 3-channel block (start, then stop) the
+                # bwd strand reads p1/p2/p3 in reverse order, so swap
+                # p1<->p3 inside both blocks.
+                ch_rev = tf.gather(ch_rev, [2, 1, 0, 5, 4, 3], axis=-1)
+                ch = tf.concat((ch, ch_rev), axis=0)
+            outside = 1.0 - tf.reduce_sum(ch, axis=-1, keepdims=True)
+            ch = tf.concat((outside, ch), axis=-1)
+        return x, nuc, r, transition_scores, ih, ch
 
     def postprocess(
         self,
@@ -504,6 +551,7 @@ class AnnotationHMM(tf.keras.Layer):
         nuc_right: tf.Tensor,
         repeats: tf.Tensor | None = None,
         intron_hint: tf.Tensor | None = None,
+        codon_hint: tf.Tensor | None = None,
         mode: HMMMode | Literal["A"] = HMMMode.POSTERIOR,
         parallel: int = 1,
         transition_scores: tf.Tensor | None = None,
@@ -552,6 +600,8 @@ class AnnotationHMM(tf.keras.Layer):
             emissions = emissions + (repeats, )
         if self.config.intron_hint_emitter is not None:
             emissions = emissions + (intron_hint, )
+        if self.config.codon_hint_emitter is not None:
+            emissions = emissions + (codon_hint, )
         return self.hmm(
             *emissions,
             transition_delta=scores,
@@ -574,7 +624,7 @@ class AnnotationHMM(tf.keras.Layer):
             and self.config.transition_scorer is not None
         ):
             transition_scores = x
-        x, nuc, r, transition_scores, ih = self.preprocess(
+        x, nuc, r, transition_scores, ih, ch = self.preprocess(
             x, nuc, transition_scores,
         )
         nuc_left, nuc_right = left_right_3mers(
@@ -596,6 +646,9 @@ class AnnotationHMM(tf.keras.Layer):
             repeats=r if self.config.repeats_emitter is not None else None,
             intron_hint=(
                 ih if self.config.intron_hint_emitter is not None else None
+            ),
+            codon_hint=(
+                ch if self.config.codon_hint_emitter is not None else None
             ),
             mode=mode,
             parallel=parallel,
