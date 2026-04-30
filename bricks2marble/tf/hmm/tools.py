@@ -192,6 +192,36 @@ def get_repeats_emission_distribution(
     return emission
 
 
+def get_introns_emission_distribution(
+    f: float,
+    intron_state_chain: int = 1,
+    heads: int = 1,
+) -> np.ndarray:
+    """Generates an emission probability matrix for encoding intron-
+    region hints that upscales probabilities of intron states inside the
+    region. At the first position of the region the donor splice-site
+    states (``EI0/EI1/EI2``) are upscaled instead, and at the last
+    position the acceptor splice-site states (``IE0/IE1/IE2``).
+
+    The categorical observation passed to the emitter is expected to be
+    a one-hot encoding over 4 classes:
+    ``0`` = outside region, ``1`` = interior, ``2`` = left border,
+    ``3`` = right border.
+
+    Returns:
+        np.ndarray: Array of shape ``(heads, 12+3*isc, 4)``, where
+            ``isc`` is the intron_state_chain argument.
+    """
+    isc = intron_state_chain
+    n_states = 12 + 3*isc
+    emission = np.ones((n_states, 4), dtype=np.float32)
+    emission[1:1+3*isc, 1] = f
+    emission[5+3*isc:8+3*isc, 2] = f
+    emission[8+3*isc:11+3*isc, 3] = f
+    emission = np.repeat(emission[np.newaxis, ...], repeats=heads, axis=0)
+    return emission
+
+
 def get_nuc_emission_distribution(
     start_codons: list[tuple[str, float]],
     stop_codons: list[tuple[str, float]],
