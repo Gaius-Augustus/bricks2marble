@@ -238,20 +238,25 @@ class Transcript(BaseModel):
                 ".", self.strand, "0", attributes,
             ]))
 
-        cumulative_bases = 0
+        order = (
+            range(len(self.cds)) if self.strand == "+"
+            else range(len(self.cds) - 1, -1, -1)
+        )
+        frames = [0] * len(self.cds)
+        bases = 0
+        for i in order:
+            frames[i] = (3 - (bases % 3)) % 3
+            bases += self.cds[i].end - self.cds[i].start
+
         for i, block in enumerate(self.cds):
-            block_length = block.end - block.start
-            frame = (3 - (cumulative_bases % 3)) % 3
+            frame = frames[i]
             for feature in ("CDS", "exon"):
                 rows.append("\t".join([
                     self.sequence, source, feature,
                     str(block.start+1), str(block.end),
-                    ".", self.strand,
-                    str(frame),
+                    ".", self.strand, str(frame),
                     attributes,
                 ]))
-
-            cumulative_bases += block_length
 
             if i < len(self.cds) - 1:
                 intron_start = block.end + 1
@@ -259,8 +264,7 @@ class Transcript(BaseModel):
                 rows.append("\t".join([
                     self.sequence, source, "intron",
                     str(intron_start), str(intron_end),
-                    ".", self.strand,
-                    str((3 - (cumulative_bases % 3)) % 3),
+                    ".", self.strand, ".",
                     attributes,
                 ]))
 
@@ -287,12 +291,19 @@ class Transcript(BaseModel):
             ".", self.strand, ".", tx_attrs,
         ]))
 
+        order = (
+            range(len(self.cds)) if self.strand == "+"
+            else range(len(self.cds) - 1, -1, -1)
+        )
+        frames = [0] * len(self.cds)
         cumulative_bases = 0
-        exon_i = cds_i = 1
+        for i in order:
+            frames[i] = (3 - (cumulative_bases % 3)) % 3
+            cumulative_bases += self.cds[i].end - self.cds[i].start
 
-        for block in self.cds:
-            block_length = block.end - block.start
-            frame = (3 - (cumulative_bases % 3)) % 3
+        exon_i = cds_i = 1
+        for i, block in enumerate(self.cds):
+            frame = frames[i]
             s = block.start + 1
             e = block.end
 
@@ -300,7 +311,6 @@ class Transcript(BaseModel):
             cds_i += 1
             rows.append(child("exon", s, e, str(frame), exon_i))
             exon_i += 1
-            cumulative_bases += block_length
 
         return "\n".join(rows)
 
