@@ -150,6 +150,7 @@ class AnnotationHMMConfig(ModelConfig):
     ir_intron_ratio_regularization: float = 0.0
 
     repeats_at_borders: float | None = None
+    spliced_stop: bool = False
 
     @property
     def repeats_in_nuc(self) -> bool:
@@ -158,11 +159,14 @@ class AnnotationHMMConfig(ModelConfig):
             or self.repeats_at_borders is not None
             or self.repeats_emitter is not None
         )
-
+   
     @property
     def n_states(self) -> int:
-        return 12 + 3*self.intron_state_chain
-
+        if self.spliced_stop:
+            return 18 + 6*self.intron_state_chain
+        else:
+            return 12 + 3*self.intron_state_chain
+            
     model_config = {"frozen": True, "extra": "forbid"}
 
 
@@ -188,10 +192,12 @@ class AnnotationHMM(tf.keras.Layer):
             heads=heads,
             share_frames=self.config.transitioner_share_frames,
             share_noncoding=self.config.transitioner_share_noncoding,
+            spliced_stop=self.config.spliced_stop,
         )
         starts, values_starts, share_starts = state_start_dist(
             isc=self.config.intron_state_chain,
             heads=heads,
+            spliced_stop=self.config.spliced_stop,
         )
         emissions_left, emissions_right = get_nuc_emission_distribution(
             start_codons=self.config.start_codons,
@@ -200,12 +206,14 @@ class AnnotationHMM(tf.keras.Layer):
             intron_end_pattern=self.config.intron_end_pattern,
             intron_state_chain=self.config.intron_state_chain,
             heads=heads,
+            spliced_stop=self.config.spliced_stop,
         )
         if self.config.repeats_emitter is not None:
             emissions_repeats = get_repeats_emission_distribution(
                 self.config.repeats_emitter,
                 intron_state_chain=self.config.intron_state_chain,
                 heads=heads,
+                spliced_stop=self.config.spliced_stop,
             )
 
         nhmms = 1
@@ -218,12 +226,13 @@ class AnnotationHMM(tf.keras.Layer):
                 states=self.config.n_states,
                 heads=heads,
             )
-
+       #hier argument übergeben !!!!
             if self.config.transitions_model3:
                 hmm.transitioner = GeneTransitioner(
                     initial_exon_len=float(self.config.initial_exon_len),
                     initial_intron_len=float(self.config.initial_intron_len),
                     initial_ir_len=float(self.config.initial_ir_len),
+                    spliced_stop = self.config.spliced_stop
                 )
 
             hmm.transitioner.allow = transitions
@@ -328,7 +337,7 @@ class AnnotationHMM(tf.keras.Layer):
             init, allow, share = emission_parameters(
                 D=D, S=S, H=H, isc=isc,
                 share_noncoding=self.config.emitter_share_noncoding,
-                share_frames=self.config.emitter_share_frames,
+                share_frames=self.config.emitter_share_frames, spliced_stop=self.config.spliced_stop,
             )
 
         if self.config.emitter_prior is not None:
@@ -380,7 +389,7 @@ class AnnotationHMM(tf.keras.Layer):
             self.transition_scorer.build(input_shape)
 
     def state_names(self) -> list[str]:
-        return state_names(self.config.intron_state_chain)
+        return state_names(self.config.intron_state_chain, self.config.spliced_stop)
 
     def preprocess(
         self,
