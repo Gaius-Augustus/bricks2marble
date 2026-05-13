@@ -244,7 +244,7 @@ def get_stop_codon_splice_sites(
         TG_probs == 0,
         dtype=stop_codon_probs.dtype,
     )
-    TG_probs = = any_codon_probs * tf.cast(
+    TG_probs = any_codon_probs * tf.cast(
         TG_probs > 0,
         dtype=stop_codon_probs.dtype,
     )
@@ -662,7 +662,7 @@ def state_transitions_simple(
 def state_transitions_ir(
     p_IR: int | float | None = None,
     spliced_stop: bool = False,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
     if spliced_stop:
         add = 3
     else:
@@ -671,10 +671,10 @@ def state_transitions_ir(
         [ 0,  7+add, 0],
         [14+3*add,  0, 0],
         [ 0,  0, np.log(p_IR - 1)],
-    ]),
+    ])
     values = indices[:, 2].astype(np.float32)
     indices = indices[:, :2].astype(np.int64)
-    return indices.tolist(), values.tolist()
+    return indices, values.tolist()
 
 def state_transitions_introns(
     isc: int = 1,
@@ -686,7 +686,7 @@ def state_transitions_introns(
     heads: int = 1,
     share_frames: bool = True,
     spliced_stop: bool = False,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     if spliced_stop:
         intron_number = 6
         add = 3
@@ -741,13 +741,13 @@ def state_transitions_introns(
     if intron_chain_skips:
         intron_outgoing = np.array([
             # outgoing edges Ikj -> IEk
-            [k+intron_number*j, 10+add+k+intron_number*(isc-1)] for j in range(isc) for k in range(0, intron_number)
+            [k+intron_number*j, 10+2*add+k+intron_number*(isc-1)] for j in range(isc) for k in range(0, intron_number)
         ])
             
     else:
         intron_outgoing = np.array([
             # outgoing edges Ik(-1) -> IEk
-            [k+intron_number*(isc-1), 10+add+k+intron_number*(isc-1)] for k in range(0, intron_number)
+            [k+intron_number*(isc-1), 10+2*add+k+intron_number*(isc-1)] for k in range(0, intron_number)
         ])
 
     if intron_chain_loop:
@@ -776,31 +776,31 @@ def state_transitions_introns(
     share = np.array(
         # loops on intron states
         [
-            [n_edges+k*intron_number, n_edges+(k+1)*intron_number]
+            [k*intron_number, (k+1)*intron_number]
             for k in range(isc)
         ]
         # edges between intron states
         + ([
-            [n_edges+n_intron_loops+k*intron_number,
-             n_edges+n_intron_loops+(k+1)*intron_number]
+            [n_intron_loops+k*intron_number,
+             n_intron_loops+(k+1)*intron_number]
             for k in range(isc-1)
         ] if intron_chain_transitions else [])
         # ingoing edges
         + [
-            [n_edges+n_intron_loops+n_intron_edges+k*intron_number,
-             n_edges+n_intron_loops+n_intron_edges+(k+1)*intron_number]
+            [n_intron_loops+n_intron_edges+k*intron_number,
+             n_intron_loops+n_intron_edges+(k+1)*intron_number]
             for k in range(isc if intron_chain_starts else 1)
         ]
         # outgoing edges
         + [
-            [n_edges+n_intron_loops+n_intron_edges+n_ingoing+k*intron_number,
-             n_edges+n_intron_loops+n_intron_edges+n_ingoing+(k+1)*intron_number]
+            [n_intron_loops+n_intron_edges+n_ingoing+k*intron_number,
+             n_intron_loops+n_intron_edges+n_ingoing+(k+1)*intron_number]
             for k in range(isc if intron_chain_skips else 1)
         ]
         # chain loop edges
         + ([
-            [n_edges+n_intron_loops+n_intron_edges+n_ingoing+n_outgoing,
-             n_edges+n_intron_loops+n_intron_edges+n_ingoing+n_outgoing+intron_number]
+            [n_intron_loops+n_intron_edges+n_ingoing+n_outgoing,
+             n_intron_loops+n_intron_edges+n_ingoing+n_outgoing+intron_number]
         ] if intron_chain_loop else [])
     )
 
@@ -822,7 +822,7 @@ def state_transitions_introns(
             + ([np.log(1/2)] if intron_chain_loop else [])
         )
 
-    return indices.tolist(), values.tolist(), share.tolist()
+    return indices, values.tolist(), share
 
 
 def state_transitions_coding(
@@ -831,7 +831,7 @@ def state_transitions_coding(
     heads: int = 1,
     share_frames: bool = True,
     spliced_stop: bool = False,
-) -> np.ndarray:
+) -> tuple[np.ndarray, np.ndarray]:
 
     if spliced_stop:
         add = 3
@@ -874,7 +874,7 @@ def state_transitions_coding(
 
     values = indices[:, 2].astype(np.float32)
     indices = indices[:, :2].astype(np.int64)
-    return indices.tolist(), values.tolist()
+    return indices, values.tolist()
 
 def state_transitions(
     isc: int = 1,
@@ -951,16 +951,20 @@ def state_transitions(
     indices_coding,values_coding = state_transitions_coding(isc,p_exon,heads,share_frames,spliced_stop)
     indices_introns,values_introns,share_introns = state_transitions_introns(isc,intron_chain_starts,
         intron_chain_skips,intron_chain_loop,intron_chain_transitions,p_intron,heads,share_frames,spliced_stop)
-
-    indices_coding[indices_coding >-1] = indices_coding[indices_coding >-1]+1
-
+    
+    indices_coding[indices_coding >-1] = indices_coding[indices_coding >-1]+1+(3+add)
+    indices_introns[indices_introns >-1] = indices_introns[indices_introns >-1]+1
+    
     indices = np.concatenate((indices_ir,indices_coding))
+    
     values = np.concatenate((values_ir, values_coding))
 
     if isc > 1:
         indices[indices > 0] = indices[indices > 0] + (3+add)*(isc-1)
 
     n_edges = len(indices)
+    share_introns[share_introns>-1] = share_introns[share_introns>-1] + n_edges
+    
     indices = np.r_[indices, indices_introns]
 
     repeats = np.arange(heads).reshape(heads, 1, 1)
