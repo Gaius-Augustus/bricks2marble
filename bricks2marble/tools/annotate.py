@@ -32,6 +32,33 @@ HMM_STATE_AGGREGATION = np.array([
     [0., 0., 0., 0., 1.],  # Stop
 ])
 
+HMM_STATE_AGGREGATION_SPLICEDSTOP = np.array([
+    [1., 0., 0., 0., 0.],  # IR
+    [0., 1., 0., 0., 0.],  # I0
+    [0., 1., 0., 0., 0.],  # I1
+    [0., 1., 0., 0., 0.],  # I2
+    [0., 1., 0., 0., 0.],  # I3
+    [0., 1., 0., 0., 0.],  # I4
+    [0., 1., 0., 0., 0.],  # I5
+    [0., 0., 1., 0., 0.],  # E0
+    [0., 0., 0., 1., 0.],  # E1
+    [0., 0., 0., 0., 1.],  # E2
+    [0., 0., 1., 0., 0.],  # Start
+    [0., 0., 0., 1., 0.],  # EI0
+    [0., 0., 0., 0., 1.],  # EI1
+    [0., 0., 1., 0., 0.],  # EI2
+    [0., 0., 1., 0., 0.],  # EI3
+    [0., 0., 0., 1., 0.],  # EI4
+    [0., 0., 0., 1., 0.],  # EI5
+    [0., 0., 0., 0., 1.],  # IE0
+    [0., 0., 1., 0., 0.],  # IE1
+    [0., 0., 0., 1., 0.],  # IE2
+    [0., 0., 0., 1., 0.],  # IE3
+    [0., 0., 0., 0., 1.],  # IE4
+    [0., 0., 0., 0., 1.],  # IE5
+    [0., 0., 0., 0., 1.],  # Stop
+])
+
 
 class Region(BaseModel):
     """Marks a consecutive strip of nucleotides on one strand of a
@@ -50,12 +77,16 @@ def _split_regions(
     encoded_labels: np.ndarray,
     offset: int = 0,
     strand: Literal["+", "-"] = "+",
+    spliced_stop: bool = False,
 ) -> list[Region]:
     """Splits a sequence of HMM states into a sequence of regions
     "intergenic", "intron" or "CDS".
     """
     arr = np.array(encoded_labels)
-    arr = HMM_STATE_AGGREGATION.argmax(1)[arr]
+    if not spliced_stop:
+        arr = HMM_STATE_AGGREGATION.argmax(1)[arr]
+    else:
+        arr = HMM_STATE_AGGREGATION_SPLICEDSTOP.argmax(1)[arr]
     arr[(arr > 1)] = 2
     change_points = np.where(np.diff(arr) != 0)[0]
     start_points = np.insert(change_points + 1, 0, 0)
@@ -140,20 +171,36 @@ def _annotation_from_dict(
 def _find_mismatches(
     pred: np.ndarray,
     exon_at_boundary: int | None = None,
+    spliced_stop: bool = False,
 ) -> np.ndarray:
-    mask = np.logical_or(
-        pred[:-1, -1] != pred[1:, 0],
-        ~np.isin(pred[:-1, -1], [0, 1, 2, 3]),
-    )
-    if exon_at_boundary is not None:
+    if not spliced_stop:
         mask = np.logical_or(
-            mask,
-            np.any(np.isin(pred[:-1, -exon_at_boundary:], [4, 5, 6]), axis=-1),
+            pred[:-1, -1] != pred[1:, 0],
+            ~np.isin(pred[:-1, -1], [0, 1, 2, 3]),
         )
+        if exon_at_boundary is not None:
+            mask = np.logical_or(
+                mask,
+                np.any(np.isin(pred[:-1, -exon_at_boundary:], [4, 5, 6]), axis=-1),
+            )
+            mask = np.logical_or(
+                mask,
+                np.any(np.isin(pred[1:, :exon_at_boundary], [4, 5, 6]), axis=-1),
+            )
+    else:
         mask = np.logical_or(
-            mask,
-            np.any(np.isin(pred[1:, :exon_at_boundary], [4, 5, 6]), axis=-1),
+            pred[:-1, -1] != pred[1:, 0],
+            ~np.isin(pred[:-1, -1], [0, 1, 2, 3,4,5,6]),
         )
+        if exon_at_boundary is not None:
+            mask = np.logical_or(
+                mask,
+                np.any(np.isin(pred[:-1, -exon_at_boundary:], [7, 8, 9]), axis=-1),
+            )
+            mask = np.logical_or(
+                mask,
+                np.any(np.isin(pred[1:, :exon_at_boundary], [7, 8, 9]), axis=-1),
+            )
     return np.where(mask)[0]
 
 
@@ -201,6 +248,7 @@ def _annotate(
     exon_at_boundary: int | None = None,
     first_tx_id: int = 0,
     concat_strand_to_reprediction: bool = False,
+    spliced_stop: bool = False,
 ) -> tuple[Annotation, int]:
     log_it(f"Start initial prediction of {fasta.N} chunks.")
     labels_fwd, labels_bwd = predict_func(fasta)
@@ -221,14 +269,14 @@ def _annotate(
         if labels_fwd is not None:
             mis_fwd = _find_mismatches(
                 labels_fwd[shift:shift+seq.N, :],
-                exon_at_boundary=exon_at_boundary,
+                exon_at_boundary=exon_at_boundary, spliced_stop = spliced_stop,
             ) + shift
         else:
             mis_fwd = np.array([])
         if labels_bwd is not None:
             mis_bwd = _find_mismatches(
                 labels_bwd[shift:shift+seq.N, :],
-                exon_at_boundary=exon_at_boundary,
+                exon_at_boundary=exon_at_boundary, spliced_stop = spliced_stop,
             ) + shift
         else:
             mis_bwd = np.array([])
@@ -350,7 +398,7 @@ def _annotate(
         if labels_fwd is not None:
             regions = _split_regions(
                 labels_fwd[shift:shift+seq.N, :].flatten()[:seq.size],
-                strand="+",
+                strand="+", spliced_stop = spliced_stop,
             )
             if seq.name not in entries_fwd: entries_fwd[seq.name] = []
             entries_fwd[seq.name] += _transcripts_from_regions(regions)
@@ -358,7 +406,7 @@ def _annotate(
         if labels_bwd is not None:
             regions = _split_regions(
                 labels_bwd[shift:shift+seq.N, :].flatten()[:seq.size],
-                strand="-",
+                strand="-", spliced_stop = spliced_stop,
             )
             if seq.name not in entries_bwd: entries_bwd[seq.name] = []
             entries_bwd[seq.name] += _transcripts_from_regions(regions)
@@ -400,6 +448,7 @@ def _annotate_genome(
     repredict_exon_at_boundary: int | None = None,
     concat_strand_to_reprediction: bool = False,
     postprocess: Callable[[Fasta, Annotation], Annotation] | None = None,
+    spliced_stop: bool = False,
 ) -> None:
     wrapper = textwrap.TextWrapper(
         width=99,
@@ -437,6 +486,7 @@ def _annotate_genome(
             concat_strand_to_reprediction=concat_strand_to_reprediction,
             exon_at_boundary=repredict_exon_at_boundary,
             first_tx_id=first_tx_id,
+            spliced_stop = spliced_stop,
         )
         if postprocess is not None:
             log_it("Calling postprocessing function.")
@@ -476,6 +526,7 @@ def annotate_genome(
     concat_strand_to_reprediction: bool = False,
     postprocess: Callable[[Fasta, Annotation], Annotation] | None = None,
     log_config: list[str] | None = None,
+    spliced_stop: bool = False,
 ) -> None:
     """Generate a genome annotation of a given fasta file.
 
@@ -625,6 +676,7 @@ def annotate_genome(
             repredict_exon_at_boundary=repredict_exon_at_boundary,
             concat_strand_to_reprediction=concat_strand_to_reprediction,
             postprocess=postprocess,
+            spliced_stop = spliced_stop,
         )
 
     if fasta.suffix == ".gz":
