@@ -211,7 +211,7 @@ def get_stop_codon_splice_sites(
             "non-default stop-codons cannot be forbidden"
             " at splice sites."
         )
-    if not has_default_stops(stop_codons):
+    if not has_default_stop_codons(stop_codons):
         raise ValueError(
             "non-default stop-codons cannot be forbidden"
             " at splice sites."
