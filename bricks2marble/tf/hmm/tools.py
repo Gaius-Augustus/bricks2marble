@@ -1,6 +1,7 @@
 import numpy as np
 import tensorflow as tf
-from hidten.tf.util import safe_log
+#from hidten.tf.util import safe_log
+from hidten_util import safe_log
 
 
 def is_codon_distribution(codons: list[tuple[str, float]]) -> bool:
@@ -479,7 +480,6 @@ def emission_parameters(
 
     return tf.keras.initializers.GlorotNormal(), allow, share
 
-
 def emission_parameters_eye(
     D: int,
     S: int,
@@ -500,6 +500,47 @@ def emission_parameters_eye(
     values = np.eye(S, dtype=np.float32)
     values += epsilon / (S-1)
     values[np.diag_indices(S)] -= epsilon * (1 + 1 / (S-1))
+    values = values.flatten()
+    values = safe_log(values)
+    if D != S: values = np.tile(values, D // S)
+    return tf.keras.initializers.Constant(values), allow, None
+
+def emission_parameters_eye_spliced_stop(
+    D: int,
+    S: int,
+    H: int,
+    epsilon: float = 0,
+) -> tuple[
+    np.ndarray | tf.keras.Initializer,
+    list[tuple[int, int, int]],
+    list[tuple[int, int]] | None
+]:
+    allow = [
+        (h, i, k)
+        for h, states in enumerate([S]*H)
+        for k in range(15)
+        for i in range(states)
+    ]
+
+    values = np.array([
+        [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
+    ], dtype=np.float32) 
+    values[values == 1] -= epsilon * (1 + 1 / (S-1))
+    values += epsilon / (S-1)
     values = values.flatten()
     values = safe_log(values)
     if D != S: values = np.tile(values, D // S)

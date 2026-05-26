@@ -226,7 +226,7 @@ class AnnotationHMM(tf.keras.Layer):
                 states=self.config.n_states,
                 heads=heads,
             )
-       #hier argument übergeben !!!!
+    
             if self.config.transitions_model3:
                 hmm.transitioner = GeneTransitioner(
                     initial_exon_len=float(self.config.initial_exon_len),
@@ -311,10 +311,16 @@ class AnnotationHMM(tf.keras.Layer):
                 class_index=0,
             )
         if self.config.nudge_repeats_noncoding > 0:
-            self.repeats_regularizer = RepeatsNonCodingRegularizer(
-                weight=self.config.nudge_repeats_noncoding,
-                coding_start_index=1+3*self.config.intron_state_chain,
-            )
+            if self.config.spliced_stop:
+                self.repeats_regularizer = RepeatsNonCodingRegularizer(
+                    weight=self.config.nudge_repeats_noncoding,
+                    coding_start_index=1+6*self.config.intron_state_chain,
+                )
+            else:
+                self.repeats_regularizer = RepeatsNonCodingRegularizer(
+                    weight=self.config.nudge_repeats_noncoding,
+                    coding_start_index=1+3*self.config.intron_state_chain,
+                )
         if self.config.ir_intron_ratio_regularization > 0:
             self.ir_intron_regularizer = IRIntronRatioRegularizer(
                 weight=self.config.ir_intron_ratio_regularization,
@@ -330,9 +336,14 @@ class AnnotationHMM(tf.keras.Layer):
         isc = self.config.intron_state_chain
 
         if self.config.emitter_eye is not None:
-            init, allow, share = emission_parameters_eye(
-                D=S, S=S, H=H, epsilon=self.config.emitter_eye,
-            )
+            if self.config.spliced_stop:
+                init, allow, share = emission_parameters_eye_spliced_stop(
+                    D=S, S=S, H=H, epsilon=self.config.emitter_eye,
+                )
+            else:
+                init, allow, share = emission_parameters_eye(
+                    D=S, S=S, H=H, epsilon=self.config.emitter_eye,
+                )
         else:
             init, allow, share = emission_parameters(
                 D=D, S=S, H=H, isc=isc,
@@ -341,9 +352,14 @@ class AnnotationHMM(tf.keras.Layer):
             )
 
         if self.config.emitter_prior is not None:
-            prior_init, prior_allow, prior_share = emission_parameters_eye(
-                D=H*S, S=S, H=H, epsilon=self.config.emitter_prior,
-            )
+            if self.config.spliced_stop:
+                prior_init, prior_allow, prior_share = emission_parameters_eye_spliced_stop(
+                    D=H*S, S=S, H=H, epsilon=self.config.emitter_prior,
+                )
+            else:
+                prior_init, prior_allow, prior_share = emission_parameters_eye(
+                    D=H*S, S=S, H=H, epsilon=self.config.emitter_prior,
+                )
 
         for hmm in (
             self.hmm if self.config.compute_heads_sequentially else [self.hmm]
@@ -376,10 +392,16 @@ class AnnotationHMM(tf.keras.Layer):
             else:
                 matrix = self.hmm.transitioner.matrix()
             isc = self.config.intron_state_chain
-            intron_value = tf.concat([tf.reduce_mean(
-                tf.linalg.diag_part(matrix[i])[1:1+3*isc],
-                keepdims=True,
-            ) for i in range(self.config.heads)], axis=0)
+            if self.config.spliced_stop:
+                intron_value = tf.concat([tf.reduce_mean(
+                    tf.linalg.diag_part(matrix[i])[1:1+6*isc],
+                    keepdims=True,
+                ) for i in range(self.config.heads)], axis=0)
+            else:
+                intron_value = tf.concat([tf.reduce_mean(
+                    tf.linalg.diag_part(matrix[i])[1:1+3*isc],
+                    keepdims=True,
+                ) for i in range(self.config.heads)], axis=0)
             self.intron_regularizer = IntronParameterRegularizer(
                 weight=self.config.intron_regularization,
                 intron_state_chain=self.config.intron_state_chain,
