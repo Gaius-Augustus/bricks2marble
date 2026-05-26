@@ -1,7 +1,6 @@
 import numpy as np
 import tensorflow as tf
-#from hidten.tf.util import safe_log
-from hidten_util import safe_log
+from hidten.tf.util import safe_log
 
 
 def is_codon_distribution(codons: list[tuple[str, float]]) -> bool:
