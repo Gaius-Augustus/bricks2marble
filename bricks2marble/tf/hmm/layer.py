@@ -8,7 +8,8 @@ from hidten.tf import TFHMM, TFBernoulliEmitter, TFCategoricalEmitter
 from ..loss import (IntronParameterRegularizer, IRIntronRatioRegularizer,
                     RepeatsNonCodingRegularizer,
                     UncertainPredictionRegularizer)
-from .tools import (emission_parameters, emission_parameters_eye,
+from .tools import (emission_parameters, emission_parameters_eye, 
+                    emission_parameters_eye_spliced_stop,
                     get_nuc_emission_distribution,
                     get_repeats_at_borders_multiplier,
                     get_repeats_emission_distribution, left_right_3mers,
