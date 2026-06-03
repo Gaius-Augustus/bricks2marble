@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bricks2marble"
-version = "0.0.5"
+version = "0.0.6"
 authors = [
   { name="Richard Krieg", email="irkri@irkri.net" },
   { name="Lars Gabriel", email="lgabriel23@gmx.de" },

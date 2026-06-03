@@ -214,7 +214,10 @@ class Transcript(BaseModel):
             str(self.start+1), str(self.end),
             ".", self.strand, ".", attributes,
         ]))
-        attributes += f' transcript_id "{self.name if transcript_id is None else transcript_id}";'
+        attributes += (
+            f' transcript_id '
+            f'"{self.name if transcript_id is None else transcript_id}";'
+        )
         rows.append("\t".join([
             self.sequence, source, "transcript",
             str(self.start+1), str(self.end),
