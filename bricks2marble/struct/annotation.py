@@ -199,6 +199,7 @@ class Transcript(BaseModel):
         self,
         source: str = "bricks2marble",
         gene_id: str | None = None,
+        transcript_id: str | None = None,
     ) -> str:
         """Returns GTF rows for this transcript. Coordinates are
         converted from 0-based half-open to 1-based fully closed. Emits
@@ -213,7 +214,7 @@ class Transcript(BaseModel):
             str(self.start+1), str(self.end),
             ".", self.strand, ".", attributes,
         ]))
-        attributes += f' transcript_id "{self.name}";'
+        attributes += f' transcript_id "{self.name if transcript_id is None else transcript_id}";'
         rows.append("\t".join([
             self.sequence, source, "transcript",
             str(self.start+1), str(self.end),
@@ -546,12 +547,13 @@ class Annotation:
         append: bool = False,
     ) -> None:
         with open(path, "a" if append else "w") as fh:
+            gene_id = 0
             for chrom_ann in self:
-                gene_id = 0
                 for tx in chrom_ann:
                     gene_id += 1
                     fh.write(tx.to_gtf_rows(
                         gene_id=f"g{gene_id}",
+                        transcript_id=f"g{gene_id}.t1",
                         source=source,
                     ) + "\n")
 
