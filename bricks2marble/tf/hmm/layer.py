@@ -160,7 +160,7 @@ class AnnotationHMMConfig(ModelConfig):
             or self.repeats_at_borders is not None
             or self.repeats_emitter is not None
         )
-   
+
     @property
     def n_states(self) -> int:
         if self.spliced_stop:
@@ -227,7 +227,7 @@ class AnnotationHMM(tf.keras.Layer):
                 states=self.config.n_states,
                 heads=heads,
             )
-    
+
             if self.config.transitions_model3:
                 hmm.transitioner = GeneTransitioner(
                     initial_exon_len=float(self.config.initial_exon_len),

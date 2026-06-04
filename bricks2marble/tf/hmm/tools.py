@@ -374,7 +374,7 @@ def get_nuc_emission_distribution(
         non_restricted_states,
         right_codon_probs,
     ], axis=0)
-          
+
     left_codon_probs = tf.tile(
         tf.expand_dims(left_codon_probs, axis=0),
         (heads, 1, 1),
@@ -538,8 +538,8 @@ def emission_parameters_eye_spliced_stop(
         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0],
         [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]
     ], dtype=np.float32) 
-    values[values == 1] -= epsilon * (1 + 1 / (S-1))
-    values += epsilon / (S-1)
+    values[values == 1] -= epsilon * (1 + 1 / (14))
+    values += epsilon / (14)
     values = values.flatten()
     values = safe_log(values)
     if D != S: values = np.tile(values, D // S)
