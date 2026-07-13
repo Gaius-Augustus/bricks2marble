@@ -38,6 +38,9 @@ class AnnotationComparison(BaseModel):
     transcript: CompareMetrics
     locus: CompareMetrics
 
+    annotation_loci: int = 0
+    reference_loci: int = 0
+
 
 @overload
 def compare(
@@ -135,6 +138,12 @@ def compare(
                 pattern_mn = re.compile(
                     r'^\s*(Missed|Novel) (.+?):[\s/\d.]+\(\s*([\d.]+)%\)'
                 )
+                # "#     Query mRNAs :  N in  M loci" and the analogous
+                # "# Reference mRNAs :  N in  K loci" report how many
+                # loci gffcompare loaded from each input.
+                pattern_loci = re.compile(
+                    r'(Query|Reference) mRNAs\s*:\s*\d+\s+in\s+(\d+)\s+loci'
+                )
 
                 results.append({
                     "base": {"sensitivity": 0, "precision": 0},
@@ -143,6 +152,8 @@ def compare(
                     "intron_chain": {"sensitivity": 0, "precision": 0},
                     "transcript": {"sensitivity": 0, "precision": 0},
                     "locus": {"sensitivity": 0, "precision": 0},
+                    "annotation_loci": 0,
+                    "reference_loci": 0,
                 })
                 with open(cache_dir / ".stats", 'r', encoding='utf-8') as file:
                     for line in file.readlines():
@@ -168,6 +179,13 @@ def compare(
                             results[-1][level] = results[-1][level] | {
                                 mn: round(perc / 100, 3),
                             }
+                        match_loci = pattern_loci.search(line)
+                        if match_loci is not None:
+                            n_loci = int(match_loci.group(2))
+                            if match_loci.group(1) == "Query":
+                                results[-1]["annotation_loci"] = n_loci
+                            else:
+                                results[-1]["reference_loci"] = n_loci
 
     try:
         if seq_given:
@@ -189,12 +207,11 @@ def annotation_diff(a: Annotation, b: Annotation) -> Annotation:
     """Returns all transcripts in `a` that are not in `b`. Transcript
     names are ignored.
     """
-    b_transcripts = {tx for chrom_ann in b for tx in chrom_ann}
+    b_transcripts = set(b.transcripts())
     result = Annotation()
-    for chrom_ann in a:
-        for tx in chrom_ann:
-            if tx not in b_transcripts:
-                result.add(tx)
+    for tx in a.transcripts():
+        if tx not in b_transcripts:
+            result.add(tx)
     return result
 
 
@@ -202,12 +219,11 @@ def annotation_and(a: Annotation, b: Annotation) -> Annotation:
     """Returns all transcripts present in both `a` and `b`. Transcript
     names are ignored.
     """
-    b_transcripts = {tx for chrom_ann in b for tx in chrom_ann}
+    b_transcripts = set(b.transcripts())
     result = Annotation()
-    for chrom_ann in a:
-        for tx in chrom_ann:
-            if tx in b_transcripts:
-                result.add(tx)
+    for tx in a.transcripts():
+        if tx in b_transcripts:
+            result.add(tx)
     return result
 
 
@@ -218,9 +234,8 @@ def annotation_or(a: Annotation, b: Annotation) -> Annotation:
     result = Annotation()
     seen = set()
     for ann in (a, b):
-        for chrom_ann in ann:
-            for tx in chrom_ann:
-                if tx not in seen:
-                    seen.add(tx)
-                    result.add(tx)
+        for tx in ann.transcripts():
+            if tx not in seen:
+                seen.add(tx)
+                result.add(tx)
     return result

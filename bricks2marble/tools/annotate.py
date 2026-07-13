@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 from ..io import iterate_sequences
 from ..log import log_it, setup_logging
-from ..struct import CDS, Annotation, Fasta, Sequence, Transcript
+from ..struct import CDS, Annotation, Fasta, Gene, Sequence, Transcript
 from .types import allowed, convert
 
 HMM_STATE_AGGREGATION = np.array([
@@ -105,8 +105,7 @@ def _annotation_from_dict(
     entries_bwd: dict[str, list[list[Region]]],
     first_tx_id: int = 0,
 ) -> tuple[Annotation, int]:
-    annotation = Annotation()
-    tx_id = first_tx_id
+    annotation = Annotation(start_gene_id=first_tx_id)
     for seq in sorted(set(entries_fwd) | set(entries_bwd)):
         len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
         len_bwd = 0 if seq not in entries_bwd else len(entries_bwd[seq])
@@ -120,21 +119,22 @@ def _annotation_from_dict(
             else:
                 tx = entries_bwd[seq].pop(0)
 
-            tx_id += 1
-            t_id = f"g{tx_id}.t1"
-            # g_id = f"g{tx_id}"
-            annotation.add(Transcript(
-                name=t_id,
+            strand = "+" if fwd else "-"
+            annotation.add(Gene(
                 sequence=seq,
-                strand="+" if fwd else "-",
-                cds=[
-                    CDS(start=r.start, end=r.end)
-                    for r in tx if r.name == "CDS"
-                ],
+                strand=strand,
+                transcripts=[Transcript(
+                    sequence=seq,
+                    strand=strand,
+                    cds=[
+                        CDS(start=r.start, end=r.end)
+                        for r in tx if r.name == "CDS"
+                    ],
+                )],
             ))
             len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
             len_bwd = 0 if seq not in entries_bwd else len(entries_bwd[seq])
-    return annotation, tx_id
+    return annotation, annotation.next_gene_id
 
 
 def _find_mismatches(

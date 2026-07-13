@@ -1,3 +1,3 @@
-from .annotation import CDS, Annotation, Transcript
+from .annotation import CDS, Annotation, Gene, Transcript
 from .fasta import Fasta, Sequence
 from .index import IndexedBGZipFasta, IndexedFasta
