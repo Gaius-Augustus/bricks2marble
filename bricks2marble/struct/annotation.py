@@ -475,7 +475,7 @@ class Gene(BaseModel):
             tx.to_genepred_row(
                 tx.display_name(gene_id, ti, transcript_pattern)
             )
-            for ti, tx in enumerate(self.transcripts)
+            for ti, tx in enumerate(self.transcripts, start=1)
         )
 
     def to_gtf_rows(
@@ -497,7 +497,7 @@ class Gene(BaseModel):
             str(self.start+1), str(self.end),
             ".", self.strand, ".", f'gene_id "{name}";',
         ])]
-        for ti, tx in enumerate(self.transcripts):
+        for ti, tx in enumerate(self.transcripts, start=1):
             rows.append(tx.to_gtf_rows(
                 source=source,
                 gene_id=name,
@@ -523,7 +523,7 @@ class Gene(BaseModel):
             str(self.start+1), str(self.end),
             ".", self.strand, ".", f"ID={name};Name={name}",
         ])]
-        for ti, tx in enumerate(self.transcripts):
+        for ti, tx in enumerate(self.transcripts, start=1):
             rows.append(tx.to_gff3_rows(
                 source=source,
                 gene_id=name,
@@ -731,13 +731,13 @@ class Annotation:
     GenePred file format.
     """
 
-    def __init__(self, start_gene_id: int = 0) -> None:
+    def __init__(self, start_gene_id: int = 1) -> None:
         """Args:
             start_gene_id (int, optional): The counter value the first
                 gene is named after; genes are numbered from there in
                 write order. Nothing is stored per gene, so removing a
                 gene never leaves a gap. Use it to continue numbering
-                across several annotations. Defaults to 0.
+                across several annotations. Defaults to 1.
         """
         self._sequences: OrderedDict[str, SequenceAnnotation] = OrderedDict()
         self._start_gene_id = start_gene_id
@@ -861,7 +861,7 @@ class Annotation:
         with open(path, "a" if append else "w") as fh:
             for gi, gene in enumerate(self.genes()):
                 gene_id = self._start_gene_id + gi
-                for ti, tx in enumerate(gene.transcripts):
+                for ti, tx in enumerate(gene.transcripts, start=1):
                     if len(tx.cds) == 0: continue
                     name = tx.display_name(
                         gene_id, ti, self._transcript_pattern
@@ -958,7 +958,7 @@ class Annotation:
             for seqanno in self:
                 sequence = fasta[seqanno.sequence]
                 for gene in seqanno.genes():
-                    for ti, tx in enumerate(gene.transcripts):
+                    for ti, tx in enumerate(gene.transcripts, start=1):
                         if target == "coding":
                             seq = tx.coding_sequence(sequence).string()
                         elif target == "protein":

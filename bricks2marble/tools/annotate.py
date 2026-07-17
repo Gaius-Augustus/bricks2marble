@@ -103,8 +103,8 @@ def _transcripts_from_regions(
 def _annotation_from_dict(
     entries_fwd: dict[str, list[list[Region]]],
     entries_bwd: dict[str, list[list[Region]]],
-    first_tx_id: int = 0,
-) -> tuple[Annotation, int]:
+    first_tx_id: int = 1,
+) -> Annotation:
     annotation = Annotation(start_gene_id=first_tx_id)
     for seq in sorted(set(entries_fwd) | set(entries_bwd)):
         len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
@@ -134,7 +134,7 @@ def _annotation_from_dict(
             ))
             len_fwd = 0 if seq not in entries_fwd else len(entries_fwd[seq])
             len_bwd = 0 if seq not in entries_bwd else len(entries_bwd[seq])
-    return annotation, annotation.next_gene_id
+    return annotation
 
 
 def _find_mismatches(
@@ -199,9 +199,9 @@ def _annotate(
     ] | None = None,
     reprediction_factor: float = 0.5,
     exon_at_boundary: int | None = None,
-    first_tx_id: int = 0,
+    first_tx_id: int = 1,
     concat_strand_to_reprediction: bool = False,
-) -> tuple[Annotation, int]:
+) -> Annotation:
     log_it(f"Start initial prediction of {fasta.N} chunks.")
     labels_fwd, labels_bwd = predict_func(fasta)
     log_it("Searching for errors.")
@@ -366,12 +366,11 @@ def _annotate(
         shift += seq.N
 
     log_it("Creating annotation.")
-    annotation, last_tx_id = _annotation_from_dict(
+    return _annotation_from_dict(
         entries_fwd,
         entries_bwd,
         first_tx_id=first_tx_id,
     )
-    return annotation, last_tx_id
 
 
 def _annotate_genome(
@@ -409,7 +408,7 @@ def _annotate_genome(
         break_on_hyphens=False,
     )
 
-    first_tx_id = 0
+    first_tx_id = 1
     for i, group in enumerate(iterate_sequences(
         fasta,
         T_max=T_max,
@@ -429,7 +428,7 @@ def _annotate_genome(
                 f"> chunk length: {group.T}\n",
             extra={"timer": False},
         )
-        group_annotation, last_tx_id = _annotate(
+        group_annotation = _annotate(
             group,
             predict_func=predict_func,
             repredict_func=repredict_func,
@@ -444,7 +443,7 @@ def _annotate_genome(
         log_it("Writing annotation to file.")
         convert(group_annotation, output, append=True, source=model_name)
         log_it("Done.")
-        first_tx_id = last_tx_id
+        first_tx_id = group_annotation.next_gene_id
 
 
 def annotate_genome(
