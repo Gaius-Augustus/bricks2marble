@@ -677,8 +677,8 @@ def state_transitions_simple(
     if not spliced_stop:
         values += [0, np.log(1/2), 0]
     else:
-        values += [0, 0, 0, np.log(1/2), 0, 0]
-        values += 3 * [0]
+        values += [0, np.log(1/2), 0]
+        values += 6 * [0]
     values += 3 * [0]
 
     repeats = np.arange(heads).reshape(heads, 1, 1)
@@ -687,9 +687,23 @@ def state_transitions_simple(
     indices = np.concatenate([repeats, indices], axis=-1, dtype=np.int64)
     indices = indices.reshape(-1, 3)
 
-    values = np.array(values).astype(np.float32)
-    values = np.exp(values) / np.sum(np.exp(values), -1, keepdims=True)
-    values = np.tile(values, heads)
+    if not spliced_stop:
+        values = np.array(values).astype(np.float32)
+        values = np.exp(values) / np.sum(np.exp(values), -1, keepdims=True)
+        values = np.tile(values, heads)
+    else:
+        values = np.array(values).astype(np.float32)
+        remove_from_sum = []
+        if share_noncoding:
+            remove_from_sum += 3*[0]
+        else:
+            if not share_frames:
+                remove_from_sum += 3 * [np.log(p_intron - 1)]
+                remove_from_sum += 6 * [0]
+        remove_from_sum += 6 * [0]
+        remove_from_sum = np.sum(np.exp(remove_from_sum), -1, keepdims=True)
+        values = np.exp(values) / (np.sum(np.exp(values), -1, keepdims=True)-remove_from_sum)
+        values = np.tile(values, heads)
 
     if share is not None:
         share = np.array(share)
@@ -1021,7 +1035,11 @@ def state_transitions(
         values,
         values_introns
     ]
-    values = np.exp(values) / np.sum(np.exp(values), -1, keepdims=True)
+    if spliced_stop:
+        remove_from_sum = np.exp(0)*6
+    else:
+        remove_from_sum = 0
+    values = np.exp(values) / (np.sum(np.exp(values), -1, keepdims=True)-remove_from_sum)
     values = np.tile(values, heads)
 
     return indices.tolist(), values, share
@@ -1063,6 +1081,113 @@ def state_start_dist(
  
     return indices.tolist(), values, share.tolist()
 
+def transform_values_spliced_stop(
+    indices: np.ndarray = None,
+    values: np.ndarray = None,
+    share: np.ndarray = None,
+    heads: int = 1,
+    isc: int = 1,
+) -> np.ndarray:
+
+    indices = np.asarray(indices, dtype=int)
+    values = np.asarray(values, dtype=float)
+    
+    if share is not None:
+        share = np.asarray(share, dtype=int)
+    
+    tf.print(indices, summarize = -1)
+    tf.print(values, summarize = -1)
+    tf.print(share, summarize = -1)
+    
+    excluded = set()
+    for introns in range(isc):
+        excluded.update(range(4 + 6 * introns, 7 + 6 * introns))
+    excluded.update(range(14 + 6 * (isc - 1), 17 + 6 * (isc - 1)))
+    excluded.update(range(20 + 6 * (isc - 1), 23 + 6 * (isc - 1)))
+    
+    n_indices_per_head = len(indices) // heads
+    n_values_per_head = len(values) // heads
+    
+    indices_head = indices[:n_indices_per_head, 1:]
+    values_head = values[:n_values_per_head]
+    
+    if share is not None:
+        share_head = share[share[:, 1] <= n_indices_per_head]
+    
+    n_rows = indices_head[:, 0].max() + 1
+    n_cols = indices_head[:, 1].max() + 1
+    matrix = np.full((n_rows, n_cols), np.nan)
+    
+    if share is None:
+        for i, (r, c) in enumerate(indices_head):
+            matrix[r, c] = values_head[i]
+    else:
+        value_idx = 0
+        share_idx = 0
+        i = 0
+        while i < len(indices_head):
+            if (
+                share_idx < len(share_head)
+                and i == share_head[share_idx][0]
+            ):
+                start, end = share_head[share_idx]
+                value = values_head[value_idx]
+                for r, c in indices_head[start:end]:
+                    matrix[r, c] = value
+                value_idx += 1
+                share_idx += 1
+                i = end
+            else:
+                r, c = indices_head[i]
+                matrix[r, c] = values_head[value_idx]
+                value_idx += 1
+                i += 1
+    
+    result = np.full_like(matrix, np.nan)
+    
+    for r in range(n_rows):
+        valid = ~np.isnan(matrix[r])
+        if not np.any(valid):
+            continue
+        row = matrix[r]
+    
+        denominator_mask = valid.copy()
+        if r not in excluded:
+            for c in excluded:
+                if c < n_cols:
+                    denominator_mask[c] = False
+    
+        denominator = np.sum(row[denominator_mask])
+        result[r, valid] = row[valid] / denominator
+    
+    if share is None:
+        output_head = np.empty_like(values_head)
+        for i, (r, c) in enumerate(indices_head):
+            output_head[i] = result[r, c]
+    else:
+        output_head = np.empty_like(values_head)
+        value_idx = 0
+        share_idx = 0
+        i = 0
+        while i < len(indices_head):
+            if (
+                share_idx < len(share_head)
+                and i == share_head[share_idx][0]
+            ):
+                r, c = indices_head[i]
+                output_head[value_idx] = result[r, c]
+                value_idx += 1
+                share_idx += 1
+                i = share_head[share_idx - 1][1]
+            else:
+                r, c = indices_head[i]
+                output_head[value_idx] = result[r, c]
+                value_idx += 1
+                i += 1
+    
+    output = np.tile(output_head, heads)
+    
+    return safe_log(output)
 
 def state_names(isc: int = 1, spliced_stop: bool = False,) -> list[str]:
     return (

@@ -13,7 +13,8 @@ from .tools import (emission_parameters, emission_parameters_eye,
                     get_nuc_emission_distribution,
                     get_repeats_at_borders_multiplier,
                     get_repeats_emission_distribution, left_right_3mers,
-                    state_names, state_start_dist, state_transitions)
+                    state_names, state_start_dist, state_transitions,
+                    transform_values_spliced_stop)
 from .transitioner import GeneTransitioner
 
 
@@ -195,6 +196,14 @@ class AnnotationHMM(tf.keras.Layer):
             share_noncoding=self.config.transitioner_share_noncoding,
             spliced_stop=self.config.spliced_stop,
         )
+        if self.config.spliced_stop:
+            values_transitions = transform_values_spliced_stop(
+                indices=transitions,
+                values=values_transitions,
+                share=share_transitions,
+                heads=heads,
+                isc=self.config.intron_state_chain,
+            )
         starts, values_starts, share_starts = state_start_dist(
             isc=self.config.intron_state_chain,
             heads=heads,
@@ -236,6 +245,11 @@ class AnnotationHMM(tf.keras.Layer):
                     spliced_stop = self.config.spliced_stop
                 )
 
+            if self.config.spliced_stop and not self.config.train_transitions:
+                hmm.transitioner.activation = tf.exp
+                hmm.transitioner.inverse_activation = tf.identity
+                hmm.transitioner.activation_start = tf.identity
+                hmm.transitioner.inverse_activation_start = tf.identity
             hmm.transitioner.allow = transitions
             hmm.transitioner.share = share_transitions
             hmm.transitioner.initializer = values_transitions
@@ -256,7 +270,13 @@ class AnnotationHMM(tf.keras.Layer):
                 stream_emitter = TFCategoricalEmitter()
 
             nuc_emitter_left = TFCategoricalEmitter()
+            if self.config.spliced_stop:
+                nuc_emitter_left.activation = tf.identity
+                nuc_emitter_left.inverse_activation = tf.identity
             nuc_emitter_right = TFCategoricalEmitter()
+            if self.config.spliced_stop:
+                nuc_emitter_right.activation = tf.identity
+                nuc_emitter_right.inverse_activation = tf.identity
 
             nuc_emitter_left.initializer = emissions_left.flatten()
             nuc_emitter_left.trainable = False
