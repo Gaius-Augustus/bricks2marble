@@ -59,7 +59,6 @@ HMM_STATE_AGGREGATION_SPLICEDSTOP = np.array([
     [0., 0., 0., 0., 1.],  # Stop
 ])
 
-
 class Region(BaseModel):
     """Marks a consecutive strip of nucleotides on one strand of a
     genome. It is used to mark a feature by type in a genome
