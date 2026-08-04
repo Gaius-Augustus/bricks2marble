@@ -309,7 +309,7 @@ def get_nuc_emission_distribution(
         dtype=stop_codon_probs.dtype,
     )  # type: ignore
     not_stop_codon_probs /= tf.reduce_sum(not_stop_codon_probs)
-    
+
     if not spliced_stop:
         add_states = 0
     else:
@@ -365,7 +365,7 @@ def get_nuc_emission_distribution(
         tf.zeros((3+(3+add_states)*intron_state_chain, 64)),
         tf.ones((3+(3+add_states)*intron_state_chain, 1)),
     ], axis=-1)
-    
+
     left_codon_probs = tf.concat([
         non_restricted_states,
         left_codon_probs,
@@ -565,7 +565,7 @@ def state_transitions_simple(
     if p_IR < 1: p_IR = 1 / (1-p_IR)
     if p_exon < 1: p_exon = 1 / (1-p_exon)
     if p_intron < 1: p_intron = 1 / (1-p_intron)
-    
+
     if spliced_stop: 
         add = 3
     else:
@@ -797,7 +797,7 @@ def state_transitions_introns(
             # outgoing edges Ikj -> IEk
             [k+intron_number*j, 10+2*add+k+intron_number*(isc-1)] for j in range(isc) for k in range(0, intron_number)
         ])
-            
+
     else:
         intron_outgoing = np.array([
             # outgoing edges Ik(-1) -> IEk
@@ -808,7 +808,7 @@ def state_transitions_introns(
         intron_repeat = np.array([
             [k+intron_number*(isc-1), k] for k in range(0, intron_number)
         ])
-    
+
     if isc > 1:
         indices = intron_loops
         if intron_chain_transitions:
@@ -877,7 +877,6 @@ def state_transitions_introns(
         )
 
     return indices, values.tolist(), share
-
 
 def state_transitions_coding(
     isc: int = 1,
@@ -1000,17 +999,17 @@ def state_transitions(
         add = 3
     else:
         add = 0
-    
+
     indices_ir,values_ir = state_transitions_ir(p_IR, spliced_stop)
     indices_coding,values_coding = state_transitions_coding(isc,p_exon,heads,share_frames,spliced_stop)
     indices_introns,values_introns,share_introns = state_transitions_introns(isc,intron_chain_starts,
         intron_chain_skips,intron_chain_loop,intron_chain_transitions,p_intron,heads,share_frames,spliced_stop)
-    
+
     indices_coding[indices_coding >-1] = indices_coding[indices_coding >-1]+1+(3+add)
     indices_introns[indices_introns >-1] = indices_introns[indices_introns >-1]+1
-    
+
     indices = np.concatenate((indices_ir,indices_coding))
-    
+
     values = np.concatenate((values_ir, values_coding))
 
     if isc > 1:
@@ -1018,7 +1017,7 @@ def state_transitions(
 
     n_edges = len(indices)
     share_introns[share_introns>-1] = share_introns[share_introns>-1] + n_edges
-    
+
     indices = np.r_[indices, indices_introns]
 
     repeats = np.arange(heads).reshape(heads, 1, 1)
@@ -1026,7 +1025,7 @@ def state_transitions(
     indices = np.tile(indices, (heads, 1, 1))
     indices = np.concatenate([repeats, indices], axis=-1, dtype=np.int64)
     indices = indices.reshape(-1, 3)
-   
+
     share = np.r_[*[
         share_introns + i*(len(indices)//heads) for i in range(heads)
     ]]
@@ -1078,7 +1077,7 @@ def state_start_dist(
         [share + i*(12+add_states+intron_number*isc) for i in range(heads)],
         axis=0,
     )
- 
+
     return indices.tolist(), values, share.tolist()
 
 def transform_values_spliced_stop(
@@ -1091,33 +1090,33 @@ def transform_values_spliced_stop(
 
     indices = np.asarray(indices, dtype=int)
     values = np.asarray(values, dtype=float)
-    
+
     if share is not None:
         share = np.asarray(share, dtype=int)
-    
+
     tf.print(indices, summarize = -1)
     tf.print(values, summarize = -1)
     tf.print(share, summarize = -1)
-    
+
     excluded = set()
     for introns in range(isc):
         excluded.update(range(4 + 6 * introns, 7 + 6 * introns))
     excluded.update(range(14 + 6 * (isc - 1), 17 + 6 * (isc - 1)))
     excluded.update(range(20 + 6 * (isc - 1), 23 + 6 * (isc - 1)))
-    
+
     n_indices_per_head = len(indices) // heads
     n_values_per_head = len(values) // heads
-    
+
     indices_head = indices[:n_indices_per_head, 1:]
     values_head = values[:n_values_per_head]
-    
+
     if share is not None:
         share_head = share[share[:, 1] <= n_indices_per_head]
-    
+
     n_rows = indices_head[:, 0].max() + 1
     n_cols = indices_head[:, 1].max() + 1
     matrix = np.full((n_rows, n_cols), np.nan)
-    
+
     if share is None:
         for i, (r, c) in enumerate(indices_head):
             matrix[r, c] = values_head[i]
@@ -1142,24 +1141,23 @@ def transform_values_spliced_stop(
                 matrix[r, c] = values_head[value_idx]
                 value_idx += 1
                 i += 1
-    
+
     result = np.full_like(matrix, np.nan)
-    
+
     for r in range(n_rows):
         valid = ~np.isnan(matrix[r])
         if not np.any(valid):
             continue
         row = matrix[r]
-    
         denominator_mask = valid.copy()
         if r not in excluded:
             for c in excluded:
                 if c < n_cols:
                     denominator_mask[c] = False
-    
+
         denominator = np.sum(row[denominator_mask])
         result[r, valid] = row[valid] / denominator
-    
+
     if share is None:
         output_head = np.empty_like(values_head)
         for i, (r, c) in enumerate(indices_head):
@@ -1184,9 +1182,9 @@ def transform_values_spliced_stop(
                 output_head[value_idx] = result[r, c]
                 value_idx += 1
                 i += 1
-    
+
     output = np.tile(output_head, heads)
-    
+
     return safe_log(output)
 
 def state_names(isc: int = 1, spliced_stop: bool = False,) -> list[str]:

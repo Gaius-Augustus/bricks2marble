@@ -168,7 +168,7 @@ class AnnotationHMMConfig(ModelConfig):
             return 18 + 6*self.intron_state_chain
         else:
             return 12 + 3*self.intron_state_chain
-            
+
     model_config = {"frozen": True, "extra": "forbid"}
 
 

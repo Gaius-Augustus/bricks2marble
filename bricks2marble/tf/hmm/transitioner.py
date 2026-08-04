@@ -60,8 +60,6 @@ class GeneTransitioner(TFTransitioner):
                 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
             ], tf.float32)
-            
-        
 
     def _build_matrix(
         self,
@@ -102,5 +100,4 @@ class GeneTransitioner(TFTransitioner):
                 tf.expand_dims(tf.reshape(A, (24, 24)), 0),
                 [self.heads, 1, 1],
             )
-        
         return A
