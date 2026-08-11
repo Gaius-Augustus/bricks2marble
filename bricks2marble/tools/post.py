@@ -21,7 +21,7 @@ def check_min_coding_length(
     """
     txs = []
     for sequence in annotation:
-        for tx in sequence:
+        for tx in sequence.transcripts():
             if tx.cds_length() < length: txs.append(tx)
 
     if remove:
@@ -57,7 +57,7 @@ def check_inframe_stop_codons(
     txs = []
     for seq_anno in annotation:
         seq = fasta[seq_anno.sequence].flat
-        for tx in seq_anno:
+        for tx in seq_anno.transcripts():
             if tx.cds_length() < 6: continue
             s = np.r_[*(seq[cds.start:cds.end] for cds in tx.cds)]
             if tx.strand == "-": s = complement(s, reverse=True)
@@ -123,7 +123,7 @@ def check_exon_boundaries(
 
     for seq_anno in annotation:
         seq = fasta[seq_anno.sequence]
-        for tx in seq_anno:
+        for tx in seq_anno.transcripts():
 
             kmer = (
                 seq.positions(tx.start, tx.start+3) if tx.strand == "+"
@@ -178,7 +178,7 @@ def check_coding_repeats(
     repeats = []
     for seq_anno in annotation:
         seq = fasta[seq_anno.sequence]
-        for tx in seq_anno:
+        for tx in seq_anno.transcripts():
             if tx.coding_sequence(seq).is_repeat_masked():
                 repeats.append(tx)
     if remove:
@@ -206,7 +206,7 @@ def check_out_of_bounds(
     txs = []
     for seq_anno in annotation:
         seq = fasta[seq_anno.sequence]
-        for tx in seq_anno:
+        for tx in seq_anno.transcripts():
             if tx.end > seq.size:
                 txs.append(tx)
     if remove:
