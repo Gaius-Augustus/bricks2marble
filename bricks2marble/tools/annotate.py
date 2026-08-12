@@ -76,13 +76,13 @@ def _split_regions(
     encoded_labels: np.ndarray,
     offset: int = 0,
     strand: Literal["+", "-"] = "+",
-    spliced_stop: bool = False,
+    no_spliced_stop: bool = False,
 ) -> list[Region]:
     """Splits a sequence of HMM states into a sequence of regions
     "intergenic", "intron" or "CDS".
     """
     arr = np.array(encoded_labels)
-    if not spliced_stop:
+    if not no_spliced_stop:
         arr = HMM_STATE_AGGREGATION.argmax(1)[arr]
     else:
         arr = HMM_STATE_AGGREGATION_SPLICEDSTOP.argmax(1)[arr]
@@ -170,9 +170,9 @@ def _annotation_from_dict(
 def _find_mismatches(
     pred: np.ndarray,
     exon_at_boundary: int | None = None,
-    spliced_stop: bool = False,
+    no_spliced_stop: bool = False,
 ) -> np.ndarray:
-    if not spliced_stop:
+    if not no_spliced_stop:
         mask = np.logical_or(
             pred[:-1, -1] != pred[1:, 0],
             ~np.isin(pred[:-1, -1], [0, 1, 2, 3]),
@@ -247,7 +247,7 @@ def _annotate(
     exon_at_boundary: int | None = None,
     first_tx_id: int = 1,
     concat_strand_to_reprediction: bool = False,
-    spliced_stop: bool = False,
+    no_spliced_stop: bool = False,
 ) -> Annotation:
     log_it(f"Start initial prediction of {fasta.N} chunks.")
     labels_fwd, labels_bwd = predict_func(fasta)
@@ -268,14 +268,14 @@ def _annotate(
         if labels_fwd is not None:
             mis_fwd = _find_mismatches(
                 labels_fwd[shift:shift+seq.N, :],
-                exon_at_boundary=exon_at_boundary, spliced_stop = spliced_stop,
+                exon_at_boundary=exon_at_boundary, no_spliced_stop = no_spliced_stop,
             ) + shift
         else:
             mis_fwd = np.array([])
         if labels_bwd is not None:
             mis_bwd = _find_mismatches(
                 labels_bwd[shift:shift+seq.N, :],
-                exon_at_boundary=exon_at_boundary, spliced_stop = spliced_stop,
+                exon_at_boundary=exon_at_boundary, no_spliced_stop = no_spliced_stop,
             ) + shift
         else:
             mis_bwd = np.array([])
@@ -397,7 +397,7 @@ def _annotate(
         if labels_fwd is not None:
             regions = _split_regions(
                 labels_fwd[shift:shift+seq.N, :].flatten()[:seq.size],
-                strand="+", spliced_stop = spliced_stop,
+                strand="+", no_spliced_stop = no_spliced_stop,
             )
             if seq.name not in entries_fwd: entries_fwd[seq.name] = []
             entries_fwd[seq.name] += _transcripts_from_regions(regions)
@@ -405,7 +405,7 @@ def _annotate(
         if labels_bwd is not None:
             regions = _split_regions(
                 labels_bwd[shift:shift+seq.N, :].flatten()[:seq.size],
-                strand="-", spliced_stop = spliced_stop,
+                strand="-", no_spliced_stop = no_spliced_stop,
             )
             if seq.name not in entries_bwd: entries_bwd[seq.name] = []
             entries_bwd[seq.name] += _transcripts_from_regions(regions)
@@ -446,7 +446,7 @@ def _annotate_genome(
     repredict_exon_at_boundary: int | None = None,
     concat_strand_to_reprediction: bool = False,
     postprocess: Callable[[Fasta, Annotation], Annotation] | None = None,
-    spliced_stop: bool = False,
+    no_spliced_stop: bool = False,
 ) -> None:
     wrapper = textwrap.TextWrapper(
         width=99,
@@ -484,7 +484,7 @@ def _annotate_genome(
             concat_strand_to_reprediction=concat_strand_to_reprediction,
             exon_at_boundary=repredict_exon_at_boundary,
             first_tx_id=first_tx_id,
-            spliced_stop = spliced_stop,
+            no_spliced_stop = no_spliced_stop,
         )
         if postprocess is not None:
             log_it("Calling postprocessing function.")
@@ -524,7 +524,7 @@ def annotate_genome(
     concat_strand_to_reprediction: bool = False,
     postprocess: Callable[[Fasta, Annotation], Annotation] | None = None,
     log_config: list[str] | None = None,
-    spliced_stop: bool = False,
+    no_spliced_stop: bool = False,
 ) -> None:
     """Generate a genome annotation of a given fasta file.
 
@@ -674,7 +674,7 @@ def annotate_genome(
             repredict_exon_at_boundary=repredict_exon_at_boundary,
             concat_strand_to_reprediction=concat_strand_to_reprediction,
             postprocess=postprocess,
-            spliced_stop = spliced_stop,
+            no_spliced_stop = no_spliced_stop,
         )
 
     if fasta.suffix == ".gz":
