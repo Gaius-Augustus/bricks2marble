@@ -171,7 +171,7 @@ def get_repeats_emission_distribution(
     f: float,
     intron_state_chain: int = 1,
     heads: int = 1,
-    spliced_stop: bool = False,
+    no_spliced_stop: bool = False,
 ) -> np.ndarray:
     """Generates an emission probability matrix for encoding repeat
     information that downscales probabilities of coding regions within
@@ -181,7 +181,7 @@ def get_repeats_emission_distribution(
         np.ndarray: Array of shape ``(heads, 12+3*isc, 2)``, where
             ``isc`` is the intron_state_chain argument.
     """
-    if spliced_stop:
+    if no_spliced_stop:
         emission = np.r_[
             np.ones((1+6*intron_state_chain), dtype=np.float32),
             np.full((17, ), fill_value=f, dtype=np.float32),
@@ -280,7 +280,7 @@ def get_nuc_emission_distribution(
     intron_end_pattern: list[tuple[str, float]],
     intron_state_chain: int = 1,
     heads: int = 1,
-    spliced_stop: bool = False,
+    no_spliced_stop: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Generates an emission probability matrix that imposes genetic
     rules on codons given codon distributions for different emerging
@@ -310,12 +310,12 @@ def get_nuc_emission_distribution(
     )  # type: ignore
     not_stop_codon_probs /= tf.reduce_sum(not_stop_codon_probs)
 
-    if not spliced_stop:
+    if not no_spliced_stop:
         add_states = 0
     else:
         add_states = 3
 
-    if not spliced_stop:
+    if not no_spliced_stop:
         left_codon_probs = tf.concat(
             [any_codon_probs]
                 + [start_codon_probs]
@@ -426,7 +426,7 @@ def emission_parameters(
     isc: int = 1,
     share_noncoding: bool = False,
     share_frames: bool = True,
-    spliced_stop: bool = False,
+    no_spliced_stop: bool = False,
 ) -> tuple[
     np.ndarray | tf.keras.Initializer,
     list[tuple[int, int, int]],
@@ -439,7 +439,7 @@ def emission_parameters(
         for i in range(states)
     ]
 
-    if spliced_stop:
+    if no_spliced_stop:
         intron_number = 6
         add_states = 3
     else:
@@ -504,7 +504,7 @@ def emission_parameters_eye(
     if D != S: values = np.tile(values, D // S)
     return tf.keras.initializers.Constant(values), allow, None
 
-def emission_parameters_eye_spliced_stop(
+def emission_parameters_eye_no_spliced_stop(
     D: int,
     S: int,
     H: int,
@@ -552,7 +552,7 @@ def state_transitions_simple(
     p_intron: int | float | None = None,
     p_exon: int | float | None = None,
     heads: int = 1,
-    spliced_stop: bool = False,
+    no_spliced_stop: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """Base case of `state_transitions` with no intron chains.
     Implementation is purely for better management and quicker testing
@@ -566,7 +566,7 @@ def state_transitions_simple(
     if p_exon < 1: p_exon = 1 / (1-p_exon)
     if p_intron < 1: p_intron = 1 / (1-p_intron)
 
-    if spliced_stop: 
+    if no_spliced_stop: 
         add = 3
     else:
         add = 0
@@ -580,7 +580,7 @@ def state_transitions_simple(
         [ 2,  2, np.log(p_intron - 1)],
         [ 3,  3, np.log(p_intron - 1)],
     ])
-    if spliced_stop:
+    if no_spliced_stop:
         indices = np.concatenate((indices, np.array([
             [ 4,  4, np.log(p_intron - 1)],
             [ 5,  5, np.log(p_intron - 1)],
@@ -595,7 +595,7 @@ def state_transitions_simple(
         [ 2,  12+add*2, 0],
         [ 3,  13+add*2, 0],
     ])))
-    if spliced_stop:
+    if no_spliced_stop:
         indices = np.concatenate((indices, np.array([
             [ 4,  20, 0],
             [ 5,  21, 0],
@@ -607,7 +607,7 @@ def state_transitions_simple(
         [ 9+add,  2, 0],
         [10+add,  3, 0],
     ])))
-    if spliced_stop:
+    if no_spliced_stop:
         indices = np.concatenate((indices, np.array([
             [14,  4, 0],
             [15,  5, 0],
@@ -629,7 +629,7 @@ def state_transitions_simple(
         [ 5+add,  9+add, np.log(1/2)],
         [ 6+add, 10+add, 0],
     ])))
-    if spliced_stop:
+    if no_spliced_stop:
         indices = np.concatenate((indices, np.array([
             [ 7,  15, 0],
             [ 7,  16, 0],
@@ -641,7 +641,7 @@ def state_transitions_simple(
         [12+2*add, 5+add, 0],
         [13+2*add, 6+add, 0],
     ])))
-    if spliced_stop:
+    if no_spliced_stop:
         indices = np.concatenate((indices, np.array([
             [21, 7, 0],
             [22, 7, 0],
@@ -655,7 +655,7 @@ def state_transitions_simple(
         share += [[0, 4+add], [4+add, 8+2*add]]
         values += [np.log(p_IR - 1), 0]
         values += 3 * [0]
-        if spliced_stop:
+        if no_spliced_stop:
             values += 3 * [0]
     elif share_frames:
         share += [[1, 4+add]]
@@ -666,7 +666,7 @@ def state_transitions_simple(
         share = None
         values += [np.log(p_IR - 1)]
         values += 3 * [np.log(p_intron - 1)]
-        if spliced_stop:
+        if no_spliced_stop:
             values += 3 * [np.log(p_intron - 1)]
             values += 6 * [0]
         values += 4 * [0]
@@ -674,7 +674,7 @@ def state_transitions_simple(
 
     values += [0, np.log(1/2), 0]
     values += 3 * [np.log(p_exon - 1)]
-    if not spliced_stop:
+    if not no_spliced_stop:
         values += [0, np.log(1/2), 0]
     else:
         values += [0, np.log(1/2), 0]
@@ -687,7 +687,7 @@ def state_transitions_simple(
     indices = np.concatenate([repeats, indices], axis=-1, dtype=np.int64)
     indices = indices.reshape(-1, 3)
 
-    if not spliced_stop:
+    if not no_spliced_stop:
         values = np.array(values).astype(np.float32)
         values = np.exp(values) / np.sum(np.exp(values), -1, keepdims=True)
         values = np.tile(values, heads)
@@ -715,9 +715,9 @@ def state_transitions_simple(
 
 def state_transitions_ir(
     p_IR: int | float | None = None,
-    spliced_stop: bool = False,
+    no_spliced_stop: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
-    if spliced_stop:
+    if no_spliced_stop:
         add = 3
     else:
         add = 0
@@ -739,9 +739,9 @@ def state_transitions_introns(
     p_intron: int | float | list[float | int] | None = None,
     heads: int = 1,
     share_frames: bool = True,
-    spliced_stop: bool = False,
+    no_spliced_stop: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
-    if spliced_stop:
+    if no_spliced_stop:
         intron_number = 6
         add = 3
     else:
@@ -762,7 +762,7 @@ def state_transitions_introns(
         [ 8+add+intron_number*(isc-1), 1],
         [ 9+add+intron_number*(isc-1), 2],
     ])
-    if spliced_stop:
+    if no_spliced_stop:
         add_ingoing = np.array([
             # ingoing edges EIk -> Ik0
             [ 13+6*(isc-1), 3],
@@ -781,7 +781,7 @@ def state_transitions_introns(
                     [ 9+add+intron_number*(isc-1), 2+k*intron_number],
                 ])
             ]
-            if spliced_stop:
+            if no_spliced_stop:
                 for k in range(1, isc):
                     intron_ingoing = np.r_[
                         intron_ingoing,
@@ -883,10 +883,10 @@ def state_transitions_coding(
     p_exon: int | float | None = None,
     heads: int = 1,
     share_frames: bool = True,
-    spliced_stop: bool = False,
+    no_spliced_stop: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
 
-    if spliced_stop:
+    if no_spliced_stop:
         add = 3
     else:
         add = 0
@@ -904,7 +904,7 @@ def state_transitions_coding(
         [ 1,  5, np.log(1/2)],
         [ 2,  6, 0],
     ])
-    if spliced_stop:
+    if no_spliced_stop:
         indices = np.concatenate((indices, np.array([
             # Ek -> EIk
             [ 0,  8, 0],
@@ -917,7 +917,7 @@ def state_transitions_coding(
         [8+add, 1, 0],
         [9+add, 2, 0],
     ])))
-    if spliced_stop:
+    if no_spliced_stop:
         indices = np.concatenate((indices, np.array([
             # IEk -> Ek
             [14, 0, 0],
@@ -941,7 +941,7 @@ def state_transitions(
     heads: int = 1,
     share_noncoding: bool = False,
     share_frames: bool = True,
-    spliced_stop: bool = False,
+    no_spliced_stop: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
     """Generates a tuple of arrays ``(indices, values, share)`` for the
     initialization of an HMM transitioner.
@@ -987,7 +987,7 @@ def state_transitions(
             p_intron=p_intron[0],
             p_IR=p_IR,
             heads=heads,
-            spliced_stop=spliced_stop
+            no_spliced_stop=no_spliced_stop
         )
     elif share_noncoding or not share_frames:
         raise ValueError(
@@ -995,15 +995,15 @@ def state_transitions(
             " configurations."
         )
 
-    if spliced_stop:
+    if no_spliced_stop:
         add = 3
     else:
         add = 0
 
-    indices_ir,values_ir = state_transitions_ir(p_IR, spliced_stop)
-    indices_coding,values_coding = state_transitions_coding(isc,p_exon,heads,share_frames,spliced_stop)
+    indices_ir,values_ir = state_transitions_ir(p_IR, no_spliced_stop)
+    indices_coding,values_coding = state_transitions_coding(isc,p_exon,heads,share_frames,no_spliced_stop)
     indices_introns,values_introns,share_introns = state_transitions_introns(isc,intron_chain_starts,
-        intron_chain_skips,intron_chain_loop,intron_chain_transitions,p_intron,heads,share_frames,spliced_stop)
+        intron_chain_skips,intron_chain_loop,intron_chain_transitions,p_intron,heads,share_frames,no_spliced_stop)
 
     indices_coding[indices_coding >-1] = indices_coding[indices_coding >-1]+1+(3+add)
     indices_introns[indices_introns >-1] = indices_introns[indices_introns >-1]+1
@@ -1034,7 +1034,7 @@ def state_transitions(
         values,
         values_introns
     ]
-    if spliced_stop:
+    if no_spliced_stop:
         remove_from_sum = np.exp(0)*6
     else:
         remove_from_sum = 0
@@ -1046,10 +1046,10 @@ def state_transitions(
 def state_start_dist(
     isc: int = 1,
     heads: int = 1,
-    spliced_stop: bool = False,
+    no_spliced_stop: bool = False,
 ) -> tuple[list[tuple[int, int]], np.ndarray, list[tuple[int, int]]]:
 
-    if not spliced_stop:
+    if not no_spliced_stop:
         intron_number = 3
         add_states = 0
     else:
@@ -1080,7 +1080,7 @@ def state_start_dist(
 
     return indices.tolist(), values, share.tolist()
 
-def transform_values_spliced_stop(
+def transform_values_no_spliced_stop(
     indices: np.ndarray = None,
     values: np.ndarray = None,
     share: np.ndarray = None,
@@ -1187,14 +1187,14 @@ def transform_values_spliced_stop(
 
     return safe_log(output)
 
-def state_names(isc: int = 1, spliced_stop: bool = False,) -> list[str]:
+def state_names(isc: int = 1, no_spliced_stop: bool = False,) -> list[str]:
     return (
         ["IR"]
-        + [f"I{k}{j}" for j in range(isc) for k in (range(6) if spliced_stop else range(3))]
+        + [f"I{k}{j}" for j in range(isc) for k in (range(6) if no_spliced_stop else range(3))]
         + ["E0", "E1", "E2"]
         + ["START", "EI0", "EI1", "EI2"] 
-        + ([ "EI3", "EI4", "EI5"] if spliced_stop else [])
+        + ([ "EI3", "EI4", "EI5"] if no_spliced_stop else [])
         + ["IE0", "IE1", "IE2"]
-        + ([ "IE3", "IE4", "IE5"] if spliced_stop else []) 
+        + ([ "IE3", "IE4", "IE5"] if no_spliced_stop else []) 
         + [ "STOP"]
     )

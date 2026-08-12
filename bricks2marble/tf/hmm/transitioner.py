@@ -12,14 +12,14 @@ class GeneTransitioner(TFTransitioner):
         initial_exon_len: float,
         initial_intron_len: float,
         initial_ir_len: float,
-        spliced_stop: bool,
+        no_spliced_stop: bool,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.exon = tf.math.log(initial_exon_len - 1)
         self.intron = tf.math.log(initial_intron_len - 1)
         self.ir = tf.math.log(initial_ir_len - 1)
-        self.spliced_stop = spliced_stop
+        self.no_spliced_stop = no_spliced_stop
 
     def build(self, input_shape=None) -> None:
         super().build(input_shape)
@@ -32,7 +32,7 @@ class GeneTransitioner(TFTransitioner):
             name="kernel3",
             trainable=self.train_transitions,
         )
-        if not self.spliced_stop:
+        if not self.no_spliced_stop:
             self._non_trainable_rows = tf.convert_to_tensor([
                 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -69,7 +69,7 @@ class GeneTransitioner(TFTransitioner):
         p = tf.sigmoid(
             self.kernel3 + delta if delta is not None else self.kernel3
         )
-        if not self.spliced_stop:
+        if not self.no_spliced_stop:
             A = tf.concat((tf.convert_to_tensor([
                 p[0], 0, 0, 0, 0, 0, 0, 1-p[0], 0, 0, 0, 0, 0, 0, 0,
                 0, p[1], 0, 0, 0, 0, 0, 0, 0, 0, 0, 1-p[1], 0, 0, 0,
