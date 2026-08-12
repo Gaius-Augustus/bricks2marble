@@ -1094,10 +1094,6 @@ def transform_values_no_spliced_stop(
     if share is not None:
         share = np.asarray(share, dtype=int)
 
-    tf.print(indices, summarize = -1)
-    tf.print(values, summarize = -1)
-    tf.print(share, summarize = -1)
-
     excluded = set()
     for introns in range(isc):
         excluded.update(range(4 + 6 * introns, 7 + 6 * introns))
