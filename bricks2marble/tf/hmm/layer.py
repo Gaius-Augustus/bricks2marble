@@ -1,6 +1,7 @@
 from typing import Literal
 
 import tensorflow as tf
+import sys
 from hidten import HMMMode
 from hidten.config import ModelConfig, with_config
 from hidten.tf import TFHMM, TFBernoulliEmitter, TFCategoricalEmitter
@@ -14,6 +15,7 @@ from .tools import (emission_parameters, emission_parameters_eye,
                     get_repeats_emission_distribution, left_right_3mers,
                     state_names, state_start_dist, state_transitions)
 from .transitioner import GeneTransitioner
+from .start_stop_codons import (get_start_codons, get_stop_codons)
 
 
 class TransitionScorerConfig(ModelConfig):
@@ -96,10 +98,12 @@ class TransitionScorer(tf.keras.Layer):
 
 class AnnotationHMMConfig(ModelConfig):
 
+    translation_table: int | None = None
     start_codons: list[tuple[str, float]] = [("ATG", 1.)]
     stop_codons: list[tuple[str, float]] = [
         ("TAG", .34), ("TAA", .33), ("TGA", .33),
     ]
+
     intron_begin_pattern: list[tuple[str, float]] = [
         ("NGT", 0.99), ("NGC", 0.01),
     ]
@@ -171,6 +175,17 @@ class AnnotationHMM(tf.keras.Layer):
 
     def __init__(self, **kwargs) -> None:
         super().__init__()
+        if kwargs.get("translation_table") is not None:
+            if "start_codons" in kwargs or "stop_codons" in kwargs:
+                print(
+                    "Warning: start_codons and stop_codons will be "
+                        "overwritten by translation_table.",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            kwargs["start_codons"] = get_start_codons(kwargs["translation_table"])
+            kwargs["stop_codons"] = get_stop_codons(kwargs["translation_table"])
+
         self.config = AnnotationHMMConfig(**kwargs)
 
         heads = (1 if self.config.compute_heads_sequentially
