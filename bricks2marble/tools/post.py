@@ -3,6 +3,7 @@ import numpy as np
 from ..io import fasta_from_string
 from ..struct import Annotation, Fasta, Transcript
 from ..struct.fasta import complement, nucleotides_to_kmers
+from ..tf.hmm.start_stop_codons import get_stop_codons
 
 
 def check_min_coding_length(
@@ -34,6 +35,7 @@ def check_inframe_stop_codons(
     fasta: Fasta,
     codons: set[str] | None = None,
     remove: bool = False,
+    translation_table: int | None = None,
 ) -> list[Transcript]:
     """Checks the annotation for inframe stop codons.
 
@@ -51,6 +53,10 @@ def check_inframe_stop_codons(
             stop codons.
     """
     if codons is None: codons = {"TAG", "TAA", "TGA"}
+
+    if translation_table is not None:
+        codons = get_stop_codons(translation_table)
+        codons = {codon for codon, probability in codons}
 
     c = [fasta_from_string(i)[0].codons for i in codons]
 
