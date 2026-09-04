@@ -53,6 +53,14 @@ def check_inframe_stop_codons(
             stop codons.
     """
     if codons is None: codons = {"TAG", "TAA", "TGA"}
+    else:
+        if translation_table is not None:
+            print(
+                "Warning: previously set stop codons will be "
+                "overwritten by translation_table.",
+                file=sys.stderr,
+                flush=True,
+            )
 
     if translation_table is not None:
         codons = get_stop_codons(translation_table)
