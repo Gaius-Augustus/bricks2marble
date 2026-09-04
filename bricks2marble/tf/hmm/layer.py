@@ -181,11 +181,11 @@ class AnnotationHMM(tf.keras.Layer):
 
             warning_start = (
             "start_codons" in kwargs
-            and dict(kwargs["start_codons"]) != dict(translation_start_codons)
+            and dict(kwargs["start_codons"]) != dict(new_start_codons)
             )
             warning_stop = (
             "stop_codons" in kwargs
-            and dict(kwargs["stop_codons"]) != dict(translation_stop_codons)
+            and dict(kwargs["stop_codons"]) != dict(new_stop_codons)
             )
             if warning_start or warning_stop:
                 print(
