@@ -125,14 +125,15 @@ class Transcript(BaseModel):
     def protein_sequence(
         self,
         sequence: Sequence,
-        translation_table: int | None = None,
         *,
+        translation_table: int | None = None,
         drop_terminal_stop: bool = True,
         require_multiple_of_three: bool = False,
     ) -> str:
         """Translate the coding region of the transcript into
-        standard-code amino acids. Unknown/ambiguous codons are set to
-        'X' and stop codons are set to '*'.
+        amino acids according to the selected translation table.
+        Unknown/ambiguous codons are set to 'X' and stop codons
+        are set to '*'.
 
         Args:
             drop_terminal_stop (bool, optional): If true, removes a
@@ -142,7 +143,7 @@ class Transcript(BaseModel):
         """
         if translation_table is None:
             translation_table = 1
-        _CODON_TABLE = create_codon_table(translation_table)
+        codon_table = create_codon_table(translation_table)
         cds = self.coding_sequence(sequence).string()
         if not cds: return ""
 
@@ -165,7 +166,7 @@ class Transcript(BaseModel):
             if any(b not in "ACGT" for b in codon):
                 aa.append("X")
             else:
-                aa.append(_CODON_TABLE.get(codon, "X"))
+                aa.append(codon_table.get(codon, "X"))
 
         prot = "".join(aa)
         if drop_terminal_stop and prot.endswith("*"):
@@ -947,7 +948,7 @@ class Annotation:
                         if target == "coding":
                             seq = tx.coding_sequence(sequence).string()
                         elif target == "protein":
-                            seq = tx.protein_sequence(sequence, translation_table)
+                            seq = tx.protein_sequence(sequence, translation_table=translation_table)
 
                         if skip_empty and (seq is None or len(seq) == 0):
                             continue

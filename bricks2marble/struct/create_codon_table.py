@@ -1,3 +1,9 @@
+from functools import cache
+
+# the stop codons defined by symbol * in tables 27, 28 and 31 are different to the stop codons
+# listed in start_stop_codons. This is because some codons can be stop codons and also translate
+# to amino acids according to the NCBI translation tables. The list of stop codons is used in the 
+# HMM, while this definition is used during the translation to the amino acid sequence.
 NCBI_TABLES = {
     1: "FFLLSSSSYY**CC*WLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSRRVVVVAAAADDEEGGGG",
     2: "FFLLSSSSYY**CCWWLLLLPPPPHHQQRRRRIIMMTTTTNNKKSS**VVVVAAAADDEEGGGG",
@@ -28,6 +34,7 @@ NCBI_TABLES = {
     33: "FFLLSSSSYYY*CCWWLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSSKVVVVAAAADDEEGGGG",
 }
 
+@cache
 def create_codon_table(
     translation_table: int = 1,
 ) -> dict[str, str]:
