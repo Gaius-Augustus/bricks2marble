@@ -3,7 +3,7 @@ import numpy as np
 from ..io import fasta_from_string
 from ..struct import Annotation, Fasta, Transcript
 from ..struct.fasta import complement, nucleotides_to_kmers
-from ..tf.hmm.start_stop_codons import get_stop_codons
+from ..struct.start_stop_codons import get_stop_codons
 
 
 def check_min_coding_length(
