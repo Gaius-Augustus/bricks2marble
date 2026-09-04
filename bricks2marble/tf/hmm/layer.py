@@ -15,7 +15,7 @@ from .tools import (emission_parameters, emission_parameters_eye,
                     get_repeats_emission_distribution, left_right_3mers,
                     state_names, state_start_dist, state_transitions)
 from .transitioner import GeneTransitioner
-from .start_stop_codons import (get_start_codons, get_stop_codons)
+from ...struct.start_stop_codons import (get_start_codons, get_stop_codons)
 
 
 class TransitionScorerConfig(ModelConfig):
@@ -176,15 +176,26 @@ class AnnotationHMM(tf.keras.Layer):
     def __init__(self, **kwargs) -> None:
         super().__init__()
         if kwargs.get("translation_table") is not None:
-            if "start_codons" in kwargs or "stop_codons" in kwargs:
+            new_start_codons = get_start_codons(kwargs["translation_table"])
+            new_stop_codons = get_stop_codons(kwargs["translation_table"])
+
+            warning_start = (
+            "start_codons" in kwargs
+            and dict(kwargs["start_codons"]) != dict(translation_start_codons)
+            )
+            warning_stop = (
+            "stop_codons" in kwargs
+            and dict(kwargs["stop_codons"]) != dict(translation_stop_codons)
+            )
+            if warning_start or warning_stop:
                 print(
                     "Warning: start_codons and stop_codons will be "
                         "overwritten by translation_table.",
                     file=sys.stderr,
                     flush=True,
                 )
-            kwargs["start_codons"] = get_start_codons(kwargs["translation_table"])
-            kwargs["stop_codons"] = get_stop_codons(kwargs["translation_table"])
+            kwargs["start_codons"] = new_start_codons
+            kwargs["stop_codons"] = new_stop_codons
 
         self.config = AnnotationHMMConfig(**kwargs)
 
