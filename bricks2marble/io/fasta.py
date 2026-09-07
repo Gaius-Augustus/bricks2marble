@@ -211,7 +211,11 @@ def iterate_sequences(
     if T_max is None:
         groups = list(range(len(idx)+1))
     else:
-        smallest_T = np.prod(T_factors) if T_factors is not None else 1
+        # Smallest admissible chunk length: it has to be a multiple of
+        # every factor, i.e. of their least common multiple.
+        smallest_T = (
+            int(np.lcm.reduce(T_factors)) if T_factors is not None else 1
+        )
         groups = [0]
         group_T = [T_max]
         i = 0
@@ -220,11 +224,18 @@ def iterate_sequences(
 
             gs = 0
             group_overflow = False
+            # A sequence joins the current group if it is not much
+            # smaller than the group's chunk length, or if the chunk
+            # length cannot be reduced any further. Sequences that are
+            # much smaller than T start a new group with a smaller T;
+            # otherwise they would be padded to T (100x for 1 kb contigs
+            # and T = 100 kb), which blows up memory.
             while i < len(idx) and (
-                idx[i][3] >= (delta * T)
-                or (T_factors is not None and idx[i][3] < smallest_T)
+                idx[i][3] >= (delta * T) or T <= smallest_T
             ):
-                gs += idx[i][3]
+                # Account for the padded footprint of the sequence in the
+                # group, not only for its real length.
+                gs += (1 + (idx[i][3] - 1) // T) * T
                 i += 1
                 if group_size_limit is not None and gs > group_size_limit:
                     group_overflow = True
@@ -236,6 +247,12 @@ def iterate_sequences(
                 T_new = idx[i][3] if T_factors is None else (
                     largest_close_to_divisible_by(idx[i][3], T_factors)
                 )
+                # Guarantee progress: the next group must use a strictly
+                # smaller chunk length, otherwise take the sequence now.
+                if T_new >= T:
+                    T_new = T
+                    gs += (1 + (idx[i][3] - 1) // T) * T
+                    i += 1
             if i > groups[-1]:
                 groups.append(i)
                 group_T.append(T)
