@@ -85,5 +85,4 @@ def largest_close_to_divisible_by(L: int, factors: list[int]) -> int:
     if M == 0 or L <= 0: raise ValueError(
         f"Did not find an appropriate multiple <{L} of numbers {factors}."
     )
-    # For L <= M the smallest admissible chunk length is M itself.
     return (1 + (L - 1) // M) * M

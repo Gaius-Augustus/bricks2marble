@@ -211,11 +211,7 @@ def iterate_sequences(
     if T_max is None:
         groups = list(range(len(idx)+1))
     else:
-        # Smallest admissible chunk length: it has to be a multiple of
-        # every factor, i.e. of their least common multiple.
-        smallest_T = (
-            int(np.lcm.reduce(T_factors)) if T_factors is not None else 1
-        )
+        smallest_T = 1 if T_factors is None else int(np.lcm.reduce(T_factors))
         groups = [0]
         group_T = [T_max]
         i = 0
@@ -224,17 +220,15 @@ def iterate_sequences(
 
             gs = 0
             group_overflow = False
-            # A sequence joins the current group if it is not much
-            # smaller than the group's chunk length, or if the chunk
-            # length cannot be reduced any further. Sequences that are
-            # much smaller than T start a new group with a smaller T;
-            # otherwise they would be padded to T (100x for 1 kb contigs
-            # and T = 100 kb), which blows up memory.
+            # current group holds sequences that are split into chunks
+            # of length T
+            # - if group exceeds group_size_limit, start a new group
+            # - if next sequence is significantly smaller than T,
+            #   start a new group -> next T is closest possible > seq
             while i < len(idx) and (
                 idx[i][3] >= (delta * T) or T <= smallest_T
             ):
-                # Account for the padded footprint of the sequence in the
-                # group, not only for its real length.
+                # group size extends by *padded* sequence length
                 gs += (1 + (idx[i][3] - 1) // T) * T
                 i += 1
                 if group_size_limit is not None and gs > group_size_limit:
@@ -247,8 +241,6 @@ def iterate_sequences(
                 T_new = idx[i][3] if T_factors is None else (
                     largest_close_to_divisible_by(idx[i][3], T_factors)
                 )
-                # Guarantee progress: the next group must use a strictly
-                # smaller chunk length, otherwise take the sequence now.
                 if T_new >= T:
                     T_new = T
                     gs += (1 + (idx[i][3] - 1) // T) * T
