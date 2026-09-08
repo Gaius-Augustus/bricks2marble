@@ -1,8 +1,8 @@
-import math
 import mmap
 from collections.abc import Container
-from functools import reduce
 from pathlib import Path
+
+import numpy as np
 
 
 def index(
@@ -81,8 +81,8 @@ def index(
 
 
 def largest_close_to_divisible_by(L: int, factors: list[int]) -> int:
-    M = reduce(math.lcm, factors)
-    if M > L or M == 0: raise ValueError(
+    M = int(np.lcm.reduce(factors))
+    if M == 0 or L <= 0: raise ValueError(
         f"Did not find an appropriate multiple <{L} of numbers {factors}."
     )
     return (1 + (L - 1) // M) * M

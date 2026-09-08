@@ -211,7 +211,7 @@ def iterate_sequences(
     if T_max is None:
         groups = list(range(len(idx)+1))
     else:
-        smallest_T = np.prod(T_factors) if T_factors is not None else 1
+        smallest_T = 1 if T_factors is None else int(np.lcm.reduce(T_factors))
         groups = [0]
         group_T = [T_max]
         i = 0
@@ -220,11 +220,16 @@ def iterate_sequences(
 
             gs = 0
             group_overflow = False
+            # current group holds sequences that are split into chunks
+            # of length T
+            # - if group exceeds group_size_limit, start a new group
+            # - if next sequence is significantly smaller than T,
+            #   start a new group -> next T is closest possible > seq
             while i < len(idx) and (
-                idx[i][3] >= (delta * T)
-                or (T_factors is not None and idx[i][3] < smallest_T)
+                idx[i][3] >= (delta * T) or T <= smallest_T
             ):
-                gs += idx[i][3]
+                # group size extends by *padded* sequence length
+                gs += (1 + (idx[i][3] - 1) // T) * T
                 i += 1
                 if group_size_limit is not None and gs > group_size_limit:
                     group_overflow = True
@@ -236,6 +241,10 @@ def iterate_sequences(
                 T_new = idx[i][3] if T_factors is None else (
                     largest_close_to_divisible_by(idx[i][3], T_factors)
                 )
+                if T_new >= T:
+                    T_new = T
+                    gs += (1 + (idx[i][3] - 1) // T) * T
+                    i += 1
             if i > groups[-1]:
                 groups.append(i)
                 group_T.append(T)
