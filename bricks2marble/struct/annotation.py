@@ -10,28 +10,8 @@ from typing import Callable, Literal
 from pydantic import BaseModel
 
 from .fasta import Fasta, Sequence
+from .create_codon_table import create_codon_table
 
-_CODON_TABLE = {
-    "TTT": "F", "TTC": "F", "TTA": "L", "TTG": "L",
-    "TCT": "S", "TCC": "S", "TCA": "S", "TCG": "S",
-    "TAT": "Y", "TAC": "Y", "TAA": "*", "TAG": "*",
-    "TGT": "C", "TGC": "C", "TGA": "*", "TGG": "W",
-
-    "CTT": "L", "CTC": "L", "CTA": "L", "CTG": "L",
-    "CCT": "P", "CCC": "P", "CCA": "P", "CCG": "P",
-    "CAT": "H", "CAC": "H", "CAA": "Q", "CAG": "Q",
-    "CGT": "R", "CGC": "R", "CGA": "R", "CGG": "R",
-
-    "ATT": "I", "ATC": "I", "ATA": "I", "ATG": "M",
-    "ACT": "T", "ACC": "T", "ACA": "T", "ACG": "T",
-    "AAT": "N", "AAC": "N", "AAA": "K", "AAG": "K",
-    "AGT": "S", "AGC": "S", "AGA": "R", "AGG": "R",
-
-    "GTT": "V", "GTC": "V", "GTA": "V", "GTG": "V",
-    "GCT": "A", "GCC": "A", "GCA": "A", "GCG": "A",
-    "GAT": "D", "GAC": "D", "GAA": "E", "GAG": "E",
-    "GGT": "G", "GGC": "G", "GGA": "G", "GGG": "G",
-}
 T_Label = Literal["cds", "intron", "intergenic"]
 T_StrandLabel = tuple[T_Label, T_Label]
 
@@ -146,12 +126,14 @@ class Transcript(BaseModel):
         self,
         sequence: Sequence,
         *,
+        translation_table: int | None = None,
         drop_terminal_stop: bool = True,
         require_multiple_of_three: bool = False,
     ) -> str:
         """Translate the coding region of the transcript into
-        standard-code amino acids. Unknown/ambiguous codons are set to
-        'X' and stop codons are set to '*'.
+        amino acids according to the selected translation table.
+        Unknown/ambiguous codons are set to 'X' and stop codons
+        are set to '*'.
 
         Args:
             drop_terminal_stop (bool, optional): If true, removes a
@@ -159,6 +141,9 @@ class Transcript(BaseModel):
             require_multiple_of_three (bool, optional): If true, raises
                 a ValueError if `len(CDS) % 3 != 0`. Defaults to False.
         """
+        if translation_table is None:
+            translation_table = 1
+        codon_table = create_codon_table(translation_table)
         cds = self.coding_sequence(sequence).string()
         if not cds: return ""
 
@@ -181,7 +166,7 @@ class Transcript(BaseModel):
             if any(b not in "ACGT" for b in codon):
                 aa.append("X")
             else:
-                aa.append(_CODON_TABLE.get(codon, "X"))
+                aa.append(codon_table.get(codon, "X"))
 
         prot = "".join(aa)
         if drop_terminal_stop and prot.endswith("*"):
@@ -919,6 +904,7 @@ class Annotation:
         line_width: int = 60,
         header_fn: Callable[[Gene, Transcript], str] | None = None,
         skip_empty: bool = True,
+        translation_table: int | None = None,
     ) -> None:
         """For a given :class:`Fasta` object, write the coding or
         protein sequence to a given file that corresponds to this
@@ -962,7 +948,7 @@ class Annotation:
                         if target == "coding":
                             seq = tx.coding_sequence(sequence).string()
                         elif target == "protein":
-                            seq = tx.protein_sequence(sequence)
+                            seq = tx.protein_sequence(sequence, translation_table=translation_table)
 
                         if skip_empty and (seq is None or len(seq) == 0):
                             continue
