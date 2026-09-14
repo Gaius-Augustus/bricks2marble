@@ -274,6 +274,11 @@ class AnnotationHMM(tf.keras.Layer):
             nuc_emitter_left = TFCategoricalEmitter()
             nuc_emitter_right = TFCategoricalEmitter()
 
+            # The genetic code enters the model here. These emitters are never
+            # trained, but they are weights all the same, so a checkpoint
+            # carries them: loading one restores the codons it was built with
+            # and a start_codons, stop_codons or translation_table set
+            # afterwards does not change the model.
             nuc_emitter_left.initializer = emissions_left.flatten()
             nuc_emitter_left.trainable = False
             nuc_emitter_right.initializer = emissions_right.flatten()
