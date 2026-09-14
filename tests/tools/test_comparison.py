@@ -238,3 +238,65 @@ def test_compare_track_bins_copy_fallback(tmp_path, monkeypatch):
         if p.suffix in (".tmap", ".refmap")
     ]
     assert leftovers == []
+
+
+@pytest.mark.skipif(
+    not _gffcompare_available(), reason="gffcompare not installed",
+)
+def test_compare_tmap_out_keeps_raw_file(tmp_path):
+    ref = tmp_path / "ref.gtf"
+    qry = tmp_path / "qry.gtf"
+    ref.write_text("\n".join([
+        _transcript("r1", [(100, 200), (300, 500)]),
+        _transcript("r2", [(5000, 5100)]),
+    ]) + "\n")
+    qry.write_text("\n".join([
+        _transcript("q1", [(100, 200), (300, 500)]),
+        _transcript("q2", [(5000, 5100)]),
+    ]) + "\n")
+
+    dest = tmp_path / "kept" / "out.tmap"          # parent does not exist
+    result = compare(qry, ref, tmap_out=dest)
+
+    assert dest.exists()
+    lines = dest.read_text().splitlines()
+    assert lines[0].split("\t")[:5] == _TMAP_HEADER.split("\t")[:5]
+    assert len(lines) == 3                          # header + two queries
+    # tmap_out alone does not switch on the binned tracking...
+    assert result.track is None
+    # ...and the metrics are still parsed.
+    assert result.annotation_loci == 2
+    # Nothing leaks next to the query.
+    leftovers = [
+        p.name for p in tmp_path.iterdir()
+        if p.suffix in (".tmap", ".refmap")
+    ]
+    assert leftovers == []
+
+
+@pytest.mark.skipif(
+    not _gffcompare_available(), reason="gffcompare not installed",
+)
+def test_compare_tmap_out_one_path_per_annotation(tmp_path):
+    ref = tmp_path / "ref.gtf"
+    ref.write_text(_transcript("r1", [(100, 500)]) + "\n")
+    queries = []
+    for name in ("a", "b"):
+        q = tmp_path / f"{name}.gtf"
+        q.write_text(_transcript(f"{name}1", [(100, 500)]) + "\n")
+        queries.append(q)
+
+    # A single path for several annotations gets indexed rather than
+    # overwritten, so no comparison silently loses its tmap.
+    results = compare(queries, ref, tmap_out=tmp_path / "m.tmap")
+    assert len(results) == 2
+    assert (tmp_path / "m_0.tmap").exists()
+    assert (tmp_path / "m_1.tmap").exists()
+
+    # An explicit path per annotation is used verbatim.
+    dests = [tmp_path / "x.tmap", tmp_path / "y.tmap"]
+    compare(queries, ref, tmap_out=dests)
+    assert all(d.exists() for d in dests)
+
+    with pytest.raises(ValueError, match="tmap_out has 1 paths"):
+        compare(queries, ref, tmap_out=[tmp_path / "only.tmap"])
