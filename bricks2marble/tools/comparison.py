@@ -152,6 +152,7 @@ def compare(
     e: int = ...,
     track_bins: int | None = ...,
     bin_col: list[str] = ...,
+    tmap_out: Path | str | None = ...,
 ) -> AnnotationComparison:
     ...
 @overload
@@ -161,6 +162,7 @@ def compare(
     e: int = ...,
     track_bins: int | None = ...,
     bin_col: list[str] = ...,
+    tmap_out: Path | str | list[Path | str] | None = ...,
 ) -> list[AnnotationComparison]:
     ...
 def compare(
@@ -169,6 +171,7 @@ def compare(
     e: int = 0,
     track_bins: int | None = None,
     bin_col: list[str] = ["Length"],
+    tmap_out: Path | str | list[Path | str] | None = None,
 ) -> AnnotationComparison | list[AnnotationComparison]:
     """Compare two annotations with the tool gffcompare:
     https://github.com/gpertea/gffcompare
@@ -224,6 +227,15 @@ def compare(
             `{class_code: [(lo, hi, n), ...]}`; with several, it is a
             dict of those keyed by column name. Only used when
             `track_bins` is given. Defaults to `["Length"]`.
+        tmap_out (Path, optional): If given, copy the raw `.tmap` file
+            here instead of letting it die with the temporary directory,
+            so callers can do their own per-transcript analysis (the
+            binned `track` only ever reports counts). Like `track_bins`,
+            supplying this drops the `-T` flag so gffcompare writes the
+            file. When a sequence of annotations is given, pass a
+            matching sequence of paths (or one path, which is then
+            suffixed with the annotation's index). Parent directories
+            are created as needed. Defaults to None (not kept).
 
     Returns:
         AnnotationComparison: See
@@ -235,6 +247,27 @@ def compare(
     if not isinstance(annotation, list):
         annotation = [annotation]
         seq_given = False
+
+    # One destination per annotation. A single path with several
+    # annotations would be overwritten on every pass, so index it.
+    if tmap_out is None:
+        tmap_dests: list[Path | None] = [None] * len(annotation)
+    elif isinstance(tmap_out, list):
+        if len(tmap_out) != len(annotation):
+            raise ValueError(
+                f"tmap_out has {len(tmap_out)} paths but {len(annotation)} "
+                f"annotations were given."
+            )
+        tmap_dests = [Path(p) for p in tmap_out]
+    elif len(annotation) == 1:
+        tmap_dests = [Path(tmap_out)]
+    else:
+        base = Path(tmap_out)
+        tmap_dests = [
+            base.with_name(f"{base.stem}_{i}{base.suffix}")
+            for i in range(len(annotation))
+        ]
+    keep_tmap = tmap_out is not None
 
     results = []
     with Converter(reference, "gtf", ignore=["gff3"]) as reference_file:
@@ -248,7 +281,7 @@ def compare(
                     annotation[i], "gtf", ignore=["gff3"],
                 ) as cache_file:
                     query = Path(cache_file)
-                    if track_bins is not None:
+                    if track_bins is not None or keep_tmap:
                         # tmap file is written next to query annotation,
                         # so we copy/symlink it into the temporary path
                         local = cache_dir / query.name
@@ -260,7 +293,8 @@ def compare(
                         "--strict-match",
                         f"-e {e}",
                     ]
-                    if track_bins is None: args.append("-T")
+                    if track_bins is None and not keep_tmap:
+                        args.append("-T")
                     args += [
                         "-o",
                         cache_dir_str.rstrip("/") + "/",
@@ -327,7 +361,7 @@ def compare(
                             else:
                                 results[-1]["reference_loci"] = n_loci
 
-                if track_bins is not None:
+                if track_bins is not None or keep_tmap:
                     # gffcompare writes one ".<query>.tmap" per input.
                     tmaps = list(cache_dir.glob("*.tmap"))
                     if not tmaps:
@@ -335,9 +369,15 @@ def compare(
                             "gffcompare did not produce a .tmap file in "
                             f"{cache_dir}."
                         )
-                    results[-1]["track"] = _track_class_codes(
-                        tmaps[0], bin_col, track_bins,
-                    )
+                    if track_bins is not None:
+                        results[-1]["track"] = _track_class_codes(
+                            tmaps[0], bin_col, track_bins,
+                        )
+                    dest = tmap_dests[i]
+                    if dest is not None:
+                        # Copy before the temporary directory goes away.
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copyfile(tmaps[0], dest)
 
     try:
         if seq_given:
