@@ -205,6 +205,12 @@ class AnnotationHMM(tf.keras.Layer):
 
         self.config = AnnotationHMMConfig(**kwargs)
 
+        if self.config.no_spliced_stop and self.config.translation_table not in (None, 1):
+            raise ValueError(
+                "The option to disallow spliced stop codons is currently only "
+                "supported for the default translation table 1."
+            )
+
         heads = (1 if self.config.compute_heads_sequentially
                  else self.config.heads)
 
