@@ -1,10 +1,14 @@
-"""Tests for :mod:`bricks2marble.struct.start_stop_codons` and :mod:`bricks2marble.struct.create_codon_table`."""
+"""Tests for :mod:`bricks2marble.struct.start_stop_codons` and
+:mod:`bricks2marble.struct.create_codon_table`."""
 
-import pytest 
+import pytest
 
-from bricks2marble.struct.start_stop_codons import (get_start_codons, get_stop_codons, START_CODONS, STOP_CODONS)
 from bricks2marble.struct.create_codon_table import create_codon_table
+from bricks2marble.struct.start_stop_codons import (START_CODONS, STOP_CODONS,
+                                                    get_start_codons,
+                                                    get_stop_codons)
 from bricks2marble.tf.hmm.layer import AnnotationHMM
+
 
 def test_valid_start_stop_distributions():
     assert set(START_CODONS) == set(STOP_CODONS)

@@ -9,8 +9,8 @@ from typing import Callable, Literal
 
 from pydantic import BaseModel
 
-from .fasta import Fasta, Sequence
 from .create_codon_table import create_codon_table
+from .fasta import Fasta, Sequence
 
 T_Label = Literal["cds", "intron", "intergenic"]
 T_StrandLabel = tuple[T_Label, T_Label]
@@ -948,7 +948,10 @@ class Annotation:
                         if target == "coding":
                             seq = tx.coding_sequence(sequence).string()
                         elif target == "protein":
-                            seq = tx.protein_sequence(sequence, translation_table=translation_table)
+                            seq = tx.protein_sequence(
+                                sequence,
+                                translation_table=translation_table,
+                            )
 
                         if skip_empty and (seq is None or len(seq) == 0):
                             continue

@@ -1,9 +1,11 @@
 from functools import cache
 
-# the stop codons defined by symbol * in tables 27, 28 and 31 are different to the stop codons
-# listed in start_stop_codons. This is because some codons can be stop codons and also translate
-# to amino acids according to the NCBI translation tables. The list of stop codons is used in the 
-# HMM, while this definition is used during the translation to the amino acid sequence.
+# the stop codons defined by symbol * in tables 27, 28 and 31 are
+# different to the stop codons listed in start_stop_codons. This is
+# because some codons can be stop codons and also translate to amino
+# acids according to the NCBI translation tables. The list of stop
+# codons is used in the HMM, while this definition is used during the
+# translation to the amino acid sequence.
 NCBI_TABLES = {
     1: "FFLLSSSSYY**CC*WLLLLPPPPHHQQRRRRIIIMTTTTNNKKSSRRVVVVAAAADDEEGGGG",
     2: "FFLLSSSSYY**CCWWLLLLPPPPHHQQRRRRIIMMTTTTNNKKSS**VVVVAAAADDEEGGGG",
@@ -38,7 +40,7 @@ NCBI_TABLES = {
 def create_codon_table(
     translation_table: int = 1,
 ) -> dict[str, str]:
-    if translation_table not in NCBI_TABLES: 
+    if translation_table not in NCBI_TABLES:
         raise ValueError(f"Unknown translation table: {translation_table}")
     translation_str = NCBI_TABLES[translation_table]
     base1 = "TTTTTTTTTTTTTTTTCCCCCCCCCCCCCCCCAAAAAAAAAAAAAAAAGGGGGGGGGGGGGGGG"
@@ -46,5 +48,7 @@ def create_codon_table(
     base3 = "TCAGTCAGTCAGTCAGTCAGTCAGTCAGTCAGTCAGTCAGTCAGTCAGTCAGTCAGTCAGTCAG"
     _CODON_TABLE = {}
     for index in range(0,64):
-        _CODON_TABLE[base1[index]+base2[index]+base3[index]] = translation_str[index]
+        _CODON_TABLE[
+            base1[index] + base2[index] + base3[index]
+        ] = translation_str[index]
     return _CODON_TABLE

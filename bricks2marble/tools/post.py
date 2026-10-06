@@ -1,5 +1,6 @@
-import numpy as np
 import sys
+
+import numpy as np
 
 from ..io import fasta_from_string
 from ..struct import Annotation, Fasta, Transcript

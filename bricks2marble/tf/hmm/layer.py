@@ -1,11 +1,12 @@
+import sys
 from typing import Literal
 
 import tensorflow as tf
-import sys
 from hidten import HMMMode
 from hidten.config import ModelConfig, with_config
 from hidten.tf import TFHMM, TFBernoulliEmitter, TFCategoricalEmitter
 
+from ...struct.start_stop_codons import get_start_codons, get_stop_codons
 from ..loss import (IntronParameterRegularizer, IRIntronRatioRegularizer,
                     RepeatsNonCodingRegularizer,
                     UncertainPredictionRegularizer)
@@ -15,7 +16,6 @@ from .tools import (emission_parameters, emission_parameters_eye,
                     get_repeats_emission_distribution, left_right_3mers,
                     state_names, state_start_dist, state_transitions)
 from .transitioner import GeneTransitioner
-from ...struct.start_stop_codons import (get_start_codons, get_stop_codons)
 
 
 class TransitionScorerConfig(ModelConfig):
