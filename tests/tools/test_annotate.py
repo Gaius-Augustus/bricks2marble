@@ -8,6 +8,7 @@ from bricks2marble.tools import annotate_genome
 from bricks2marble.tools.annotate import (Region, _annotate,
                                           _annotation_from_dict,
                                           _find_mismatches, _first_non_zero,
+                                          _format_duration, _gene_count,
                                           _merge_replace_center,
                                           _split_regions,
                                           _transcripts_from_regions)
@@ -584,3 +585,136 @@ def test_annotate_genome_excludes_sequences(tmp_path):
     # Without the filter both sequences are annotated (see the test
     # above), so this really exercises exclude_seqs.
     assert {f[0] for f in _features(out, "gene")} == {"chr1"}
+
+
+# -------------------------------------------------------------------- #
+# log of annotate_genome
+# -------------------------------------------------------------------- #
+def _log_lines(path):
+    """Log lines with the elapsed time prefix stripped."""
+    return [
+        line.split("] ", 1)[1] if line.startswith("[") else line
+        for line in path.read_text().splitlines()
+    ]
+
+
+def _summary(lines):
+    """The summary between the closing box and the dashed line that
+    ends the log.
+    """
+    assert lines[-1] == "-" * 99
+    return lines[lines.index(f"|{'Finished': ^97}|") + 2:-1]
+
+
+def test_annotate_genome_logs_gene_counts_without_postprocess(tmp_path):
+    annotate_genome(
+        fasta=_two_sequence_fasta(tmp_path / "genome.fa"),
+        predict_func=_one_gene_predict,
+        output=tmp_path / "out.gtf",
+        model_name="Exampler",
+        T_max=100,
+        min_sequence_size=None,
+    )
+    lines = _log_lines(tmp_path / "out.log")
+    i = lines.index("Predicted 2 genes.")
+    assert lines[i+1] == "Writing annotation containing 2 genes to file."
+    summary = _summary(lines)
+    assert summary[:3] == [
+        "> genes predicted by Exampler: 2",
+        "> annotated sequences: 2 (200 nt)",
+        "> time: 0s",
+    ]
+    assert summary[3].startswith("> peak memory: ")
+
+
+def test_annotate_genome_logs_genes_removed_by_postprocess(tmp_path):
+    def drop_all(group, annotation):
+        for gene in list(annotation.genes()):
+            annotation.remove(gene)
+        return annotation
+
+    annotate_genome(
+        fasta=_two_sequence_fasta(tmp_path / "genome.fa"),
+        predict_func=_one_gene_predict,
+        output=tmp_path / "out.gtf",
+        model_name="Exampler",
+        T_max=100,
+        min_sequence_size=None,
+        postprocess=drop_all,
+        log_summary=lambda: ["peak GPU memory: 1.00 GiB"],
+    )
+    lines = _log_lines(tmp_path / "out.log")
+    i = lines.index("Predicted 2 genes. Calling postprocessing function.")
+    assert lines[i+1] == (
+        "Removed 2 genes by postprocessing. "
+        "Writing annotation containing 0 genes to file."
+    )
+    summary = _summary(lines)
+    assert summary[:2] == [
+        "> genes predicted by Exampler: 2",
+        "> genes after postprocessing: 0",
+    ]
+    assert summary[-1] == "> peak GPU memory: 1.00 GiB"
+
+
+def test_annotate_genome_logs_genes_added_by_postprocess(tmp_path):
+    def duplicate(group, annotation):
+        for gene in list(annotation.genes()):
+            annotation.add(gene.model_copy(deep=True))
+        return annotation
+
+    annotate_genome(
+        fasta=_write_fasta(tmp_path / "genome.fa"),
+        predict_func=_one_gene_predict,
+        output=tmp_path / "out.gtf",
+        T_max=100,
+        min_sequence_size=None,
+        postprocess=duplicate,
+    )
+    lines = _log_lines(tmp_path / "out.log")
+    i = lines.index("Predicted 1 gene. Calling postprocessing function.")
+    assert lines[i+1] == (
+        "Added 1 gene by postprocessing. "
+        "Writing annotation containing 2 genes to file."
+    )
+
+
+def test_annotate_genome_logs_summary_for_gz_input(tmp_path):
+    import gzip
+    fasta = _write_fasta(tmp_path / "genome.fa")
+    with gzip.open(tmp_path / "genome.fa.gz", "wb") as f:
+        f.write(fasta.read_bytes())
+    annotate_genome(
+        fasta=tmp_path / "genome.fa.gz",
+        predict_func=_one_gene_predict,
+        output=tmp_path / "out.gtf",
+        model_name="Exampler",
+        allow_extract_gz=True,
+        T_max=100,
+        min_sequence_size=None,
+    )
+    lines = _log_lines(tmp_path / "out.log")
+    assert "> genes predicted by Exampler: 1" in lines
+
+
+@pytest.mark.parametrize("seconds, expected", [
+    (0.2, "0s"),
+    (59.6, "1m"),
+    (61, "1m 1s"),
+    (3600, "1h"),
+    (3605, "1h 5s"),
+    (3725.4, "1h 2m 5s"),
+    (90000, "25h"),
+])
+def test_format_duration_leaves_out_zero_units(seconds, expected):
+    assert _format_duration(seconds) == expected
+
+
+@pytest.mark.parametrize("n, expected", [
+    (0, "0 genes"),
+    (1, "1 gene"),
+    (999, "999 genes"),
+    (12345, "12,345 genes"),
+])
+def test_gene_count_uses_thousands_separators(n, expected):
+    assert _gene_count(n) == expected

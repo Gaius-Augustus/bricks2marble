@@ -1,9 +1,12 @@
 import gzip
 import shutil
+import sys
 import tempfile
 import textwrap
 from collections.abc import Container
+from dataclasses import dataclass
 from pathlib import Path
+from timeit import default_timer as clock
 from typing import Callable, Literal
 
 import numpy as np
@@ -373,6 +376,40 @@ def _annotate(
     )
 
 
+@dataclass
+class _Summary:
+    """Totals over all groups of an annotation, reported at its end."""
+
+    sequences: int = 0
+    nucleotides: int = 0
+    predicted_genes: int = 0
+    genes: int = 0
+
+
+def _gene_count(n: int) -> str:
+    return f"{n:,} gene" if n == 1 else f"{n:,} genes"
+
+
+def _format_duration(seconds: float) -> str:
+    """Formats a duration like ``1h 2m 5s``, leaving out zero units."""
+    s = round(seconds)
+    units = ((s // 3600, "h"), (s // 60 % 60, "m"), (s % 60, "s"))
+    parts = [f"{value}{unit}" for value, unit in units if value > 0]
+    return " ".join(parts) if parts else "0s"
+
+
+def _peak_memory() -> int | None:
+    """Peak resident memory of this process in bytes, if the platform
+    reports it.
+    """
+    try:
+        import resource
+    except ImportError: return None
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # bytes on macOS, kilobytes everywhere else
+    return peak if sys.platform == "darwin" else peak * 1024
+
+
 def _annotate_genome(
     fasta: Path | str,
     predict_func: Callable[[Fasta],
@@ -399,7 +436,7 @@ def _annotate_genome(
     repredict_exon_at_boundary: int | None = None,
     concat_strand_to_reprediction: bool = False,
     postprocess: Callable[[Fasta, Annotation], Annotation] | None = None,
-) -> None:
+) -> _Summary:
     wrapper = textwrap.TextWrapper(
         width=99,
         initial_indent=" " * 13,
@@ -408,6 +445,7 @@ def _annotate_genome(
         break_on_hyphens=False,
     )
 
+    summary = _Summary()
     first_tx_id = 1
     for i, group in enumerate(iterate_sequences(
         fasta,
@@ -437,13 +475,32 @@ def _annotate_genome(
             exon_at_boundary=repredict_exon_at_boundary,
             first_tx_id=first_tx_id,
         )
+        # counted first, as postprocessing may remove genes in place
+        predicted = sum(1 for _ in group_annotation.genes())
+        message = f"Predicted {_gene_count(predicted)}."
         if postprocess is not None:
-            log_it("Calling postprocessing function.")
+            log_it(f"{message} Calling postprocessing function.")
             group_annotation = postprocess(group, group_annotation)
-        log_it("Writing annotation to file.")
+        else:
+            log_it(message)
+        genes = sum(1 for _ in group_annotation.genes())
+        message = (
+            f"Writing annotation containing {_gene_count(genes)} to file."
+        )
+        if postprocess is not None:
+            change = "Removed" if genes <= predicted else "Added"
+            difference = _gene_count(abs(predicted - genes))
+            message = f"{change} {difference} by postprocessing. {message}"
+        log_it(message)
         convert(group_annotation, output, append=True, source=model_name)
         log_it("Done.")
         first_tx_id = group_annotation.next_gene_id
+
+        summary.sequences += len(group)
+        summary.nucleotides += sum(seq.size for seq in group)
+        summary.predicted_genes += predicted
+        summary.genes += genes
+    return summary
 
 
 def annotate_genome(
@@ -475,6 +532,7 @@ def annotate_genome(
     concat_strand_to_reprediction: bool = False,
     postprocess: Callable[[Fasta, Annotation], Annotation] | None = None,
     log_config: list[str] | None = None,
+    log_summary: Callable[[], list[str]] | None = None,
 ) -> None:
     """Generate a genome annotation of a given fasta file.
 
@@ -566,7 +624,13 @@ def annotate_genome(
         log_config (list[str], optional): A list of strings to
             write to the `log_file` as additional information at the
             start of the annotation. Defaults to None.
+        log_summary (Callable, optional): A function returning a list
+            of strings to write to the `log_file` as additional
+            information at the end of the annotation, for example
+            resource usage only the caller can measure. Defaults to
+            None.
     """
+    start = clock()
     fasta = Path(fasta)
     output = Path(output)
     if output.exists():
@@ -605,8 +669,8 @@ def annotate_genome(
         config_log += log_config
     log_it("> " + "\n> ".join(config_log) + "\n", extra={"timer": False})
 
-    def _call_annotate(fasta_file: Path | str):
-        _annotate_genome(
+    def _call_annotate(fasta_file: Path | str) -> _Summary:
+        return _annotate_genome(
             fasta=fasta_file,
             predict_func=predict_func,
             output=output,
@@ -638,13 +702,29 @@ def annotate_genome(
             )
             with gzip.open(fasta, "rb") as f_fasta_gz:
                 shutil.copyfileobj(f_fasta_gz, tmp)
+            # the fasta is read by its name, so nothing may stay buffered
+            tmp.flush()
 
-            fasta = Path(tmp.name)
-            _call_annotate(fasta)
-        return
-    _call_annotate(fasta)
+            summary = _call_annotate(Path(tmp.name))
+    else:
+        summary = _call_annotate(fasta)
 
+    summary_log = [
+        f"genes predicted by {model_name}: {summary.predicted_genes:,}",
+    ]
+    if postprocess is not None:
+        summary_log += [f"genes after postprocessing: {summary.genes:,}"]
+    summary_log += [
+        f"annotated sequences: {summary.sequences:,} "
+        f"({summary.nucleotides:,} nt)",
+        f"time: {_format_duration(clock() - start)}",
+    ]
+    if (peak := _peak_memory()) is not None:
+        summary_log += [f"peak memory: {peak / 1024**3:.2f} GiB"]
+    if log_summary is not None:
+        summary_log += log_summary()
     log_it(
-        f"\n{'':-^99}\n|{'Finished': ^97}|\n{'':-^99}",
+        f"\n{'':-^99}\n|{'Finished': ^97}|\n{'':-^99}\n> "
+        + "\n> ".join(summary_log) + f"\n{'':-^99}",
         extra={"timer": False},
     )
