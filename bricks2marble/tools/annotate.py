@@ -188,6 +188,19 @@ def _first_non_zero(x: np.ndarray) -> int:
     return idx
 
 
+def _clear_crossing_gene(labels: np.ndarray, pos: int) -> None:
+    """Sets the labels of the gene crossing position ``pos`` to
+    intergenic, in place. The gene reaches from the last intergenic
+    label before ``pos`` to the first one at or after it, or to the
+    start or end of ``labels`` if there is none.
+    """
+    first_ir_l = _first_non_zero(labels[:pos][::-1] == 0)
+    first_ir_r = _first_non_zero(labels[pos:] == 0)
+    l = 0 if first_ir_l == -1 else pos - first_ir_l
+    r = None if first_ir_r == -1 else pos + first_ir_r
+    labels[l:r] = 0
+
+
 def _annotate(
     fasta: Fasta,
     predict_func: Callable[[Fasta],
@@ -213,6 +226,9 @@ def _annotate(
     repred_index = []
     repred_strand = []
     repred_sequence = []
+    # position of the boundary within its own sequence, unlike
+    # repred_index which counts chunks over the whole group
+    repred_boundary = []
     repred_t = int(fasta.T * reprediction_factor)
     total_mis_fwd = 0
     total_mis_bwd = 0
@@ -246,6 +262,7 @@ def _annotate(
         total_mis_both += len(mis_both)
         repred_index.extend(mis)
         repred_sequence.extend([seq_i]*len(mis))
+        repred_boundary.extend((mis - shift + 1) * fasta.T)
         repred_strand.extend(np.r_[
             np.zeros(len(mis_fwd), dtype=np.int32),
             np.ones(len(mis_bwd), dtype=np.int32),
@@ -298,7 +315,7 @@ def _annotate(
             if not success:
                 if repred_sequence[k] not in failed_fwd:
                     failed_fwd[repred_sequence[k]] = []
-                failed_fwd[repred_sequence[k]].append((i+1) * fasta.T)
+                failed_fwd[repred_sequence[k]].append(repred_boundary[k])
         if strand == 1 or strand == 2:
             labels_bwd[i], labels_bwd[i+1], success = (  # type: ignore
                 _merge_replace_center(
@@ -310,7 +327,7 @@ def _annotate(
             if not success:
                 if repred_sequence[k] not in failed_bwd:
                     failed_bwd[repred_sequence[k]] = []
-                failed_bwd[repred_sequence[k]].append((i+1) * fasta.T)
+                failed_bwd[repred_sequence[k]].append(repred_boundary[k])
 
     if len(failed_fwd) + len(failed_bwd) > 0:
         log_it(
@@ -323,24 +340,12 @@ def _annotate(
             if seq_i in failed_fwd:
                 lbl_seq = labels_fwd[shift:shift+seq.N, :].flatten()
                 for pos in failed_fwd[seq_i]:
-                    l = pos - repred_t
-                    r = pos + repred_t
-                    first_ir_l = _first_non_zero(lbl_seq[:l][::-1] == 0)
-                    first_ir_r = _first_non_zero(lbl_seq[r:] == 0)
-                    l = 0 if first_ir_l == -1 else l - first_ir_l
-                    r = None if first_ir_r == -1 else r + first_ir_r
-                    lbl_seq[l:r] = 0
+                    _clear_crossing_gene(lbl_seq, pos)
                 labels_fwd[shift:shift+seq.N, :] = lbl_seq.reshape(-1, fasta.T)
             if seq_i in failed_bwd:
                 lbl_seq = labels_bwd[shift:shift+seq.N, :].flatten()
                 for pos in failed_bwd[seq_i]:
-                    l = pos - repred_t
-                    r = pos + repred_t
-                    first_ir_l = _first_non_zero(lbl_seq[:l][::-1] == 0)
-                    first_ir_r = _first_non_zero(lbl_seq[r:] == 0)
-                    l = 0 if first_ir_l == -1 else l - first_ir_l
-                    r = None if first_ir_r == -1 else r + first_ir_r
-                    lbl_seq[l:r] = 0
+                    _clear_crossing_gene(lbl_seq, pos)
                 labels_bwd[shift:shift+seq.N, :] = lbl_seq.reshape(-1, fasta.T)
             shift += seq.N
 

@@ -7,6 +7,7 @@ from bricks2marble.struct import Fasta, Sequence
 from bricks2marble.tools import annotate_genome
 from bricks2marble.tools.annotate import (Region, _annotate,
                                           _annotation_from_dict,
+                                          _clear_crossing_gene,
                                           _find_mismatches, _first_non_zero,
                                           _format_duration, _gene_count,
                                           _merge_replace_center,
@@ -441,6 +442,70 @@ def test_repredicted_annotation_gtf_matches_notebook(tmp_path):
         ("16", "18"), ("25", "27"), ("56", "58"),
     ]
     assert all(f[1] == "Exampler" for f in _features(out, "CDS"))
+
+
+# -------------------------------------------------------------------- #
+# example 3: a reprediction that cannot be merged
+# -------------------------------------------------------------------- #
+@pytest.mark.parametrize("labels, pos, expected", [
+    # gene on both sides of the boundary
+    ([0, 7, 5, 9, 2, 2, 0], 4, [0, 0, 0, 0, 0, 0, 0]),
+    # gene starting at the boundary, the gene before it is kept
+    ([0, 7, 5, 14, 0, 2, 2, 0], 5, [0, 7, 5, 14, 0, 0, 0, 0]),
+    # gene ending at the boundary, the gene after it is kept
+    ([0, 2, 2, 0, 7, 5, 14, 0], 3, [0, 0, 0, 0, 7, 5, 14, 0]),
+    # no intergenic label on one side clears up to the end
+    ([7, 5, 9, 2, 2, 0], 3, [0, 0, 0, 0, 0, 0]),
+    ([0, 7, 5, 9, 2, 2], 3, [0, 0, 0, 0, 0, 0]),
+    # nothing crosses an intergenic boundary
+    ([0, 7, 5, 14, 0, 0], 5, [0, 7, 5, 14, 0, 0]),
+])
+def test_clear_crossing_gene(labels, pos, expected):
+    labels = np.array(labels)
+    _clear_crossing_gene(labels, pos)
+    assert labels.tolist() == expected
+
+
+# Chunks of 10 with the boundary at 10 between the first two chunks. The
+# gene in the first chunk is never closed, its intron runs to the end of
+# the chunk. The next chunk is intergenic up to a complete gene at 13.
+# The reprediction keeps the intron open as well, so it agrees with the
+# right chunk nowhere and the merge fails.
+FAILED_FWD = np.array([
+    0,  7,  5,  6,  4,  5,  6, 10,  3,  3,  # fail
+    0,  0,  0,  7,  5,  6,  4,  5, 14,  0,
+    0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+])
+FAILED_REPREDICT_FWD = np.array([5, 6, 10, 3, 3, 3, 3, 3, 3, 3])
+
+
+def test_failed_merge_states_are_valid_hmm_paths():
+    _assert_valid_hmm_path(FAILED_FWD, breaks={9})
+    _assert_valid_hmm_path(FAILED_REPREDICT_FWD)
+
+
+@pytest.mark.parametrize("failing_first", [True, False])
+def test_annotate_removes_gene_at_failed_merge(failing_first):
+    # The failing sequence may come first or second in the group, the
+    # boundary has to be found within the sequence either way.
+    failing = Sequence(np.zeros(30, dtype=np.int8), name="failing")
+    empty = Sequence(np.zeros(20, dtype=np.int8), name="empty")
+    fasta = Fasta([failing, empty] if failing_first else [empty, failing])
+    fasta = fasta.resample(10)
+    fwd = np.zeros((5, 10), dtype=int)
+    if failing_first: fwd[:3] = FAILED_FWD.reshape(3, 10)
+    else: fwd[2:] = FAILED_FWD.reshape(3, 10)
+
+    def predict_func(fasta):
+        if fasta.N == 1:
+            return FAILED_REPREDICT_FWD.reshape(1, 10).copy(), \
+                np.zeros((1, 10), dtype=int)
+        return fwd.copy(), np.zeros((5, 10), dtype=int)
+
+    ann = _annotate(fasta, predict_func=predict_func)
+    # Only the unclosed gene is removed, the complete gene next to the
+    # boundary stays.
+    assert _genes(ann) == [("failing", "+", [[(13, 19)]])]
 
 
 # -------------------------------------------------------------------- #
