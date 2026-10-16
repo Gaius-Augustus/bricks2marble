@@ -323,6 +323,50 @@ def test_to_gtf_append(tmp_path):
     assert len(genes) == 2
 
 
+def test_writers_skip_transcripts_without_cds(tmp_path):
+    fasta = fasta_from_string("ATGAAAGTCTAA")
+    name = fasta[0].name
+    ann = Annotation()
+    ann.add(Gene(sequence=name, strand="+", transcripts=[
+        tx(sequence=name), tx((0, 6), (9, 12), sequence=name),
+    ]))
+    ann.add(tx(sequence=name))
+    ann.add(tx((0, 12), sequence=name))
+    # only what is written is counted, the same in every format
+    expected = ["g1_t1", "g2_t1"]
+    assert ann.next_gene_id == 3
+
+    ann.to_genepred(tmp_path / "o.gp")
+    rows = (tmp_path / "o.gp").read_text().splitlines()
+    assert [r.split("\t")[0] for r in rows] == expected
+
+    ann.to_gtf(tmp_path / "o.gtf")
+    lines = [ln.split("\t") for ln in
+             (tmp_path / "o.gtf").read_text().splitlines()]
+    genes = [ln for ln in lines if ln[2] == "gene"]
+    assert [(g[3], g[4], g[8]) for g in genes] == [
+        ("1", "12", 'gene_id "g1";'), ("1", "12", 'gene_id "g2";'),
+    ]
+    assert [ln[8].split('transcript_id "')[1].split('"')[0]
+            for ln in lines if ln[2] == "transcript"] == expected
+
+    ann.to_gff3(tmp_path / "o.gff3")
+    lines = [ln.split("\t") for ln in
+             (tmp_path / "o.gff3").read_text().splitlines()
+             if not ln.startswith("#")]
+    assert [ln[8].split(";")[0] for ln in lines if ln[2] == "gene"] == [
+        "ID=g1", "ID=g2",
+    ]
+    assert [ln[8].split(";")[0] for ln in lines if ln[2] == "mRNA"] == [
+        f"ID={e}" for e in expected
+    ]
+
+    ann.sequence_to_file("protein", fasta, tmp_path / "p.fa")
+    headers = [ln for ln in (tmp_path / "p.fa").read_text().splitlines()
+               if ln.startswith(">")]
+    assert [h[1:].split("|")[1] for h in headers] == expected
+
+
 def test_set_naming_changes_output(tmp_path):
     ann = Annotation()
     ann.add(tx((10, 20), sequence="chr1"))

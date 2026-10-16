@@ -421,11 +421,11 @@ class Gene(BaseModel):
 
     @property
     def start(self) -> int:
-        return min(tx.start for tx in self.transcripts)
+        return min(tx.start for tx in self.transcripts if tx.cds)
 
     @property
     def end(self) -> int:
-        return max(tx.end for tx in self.transcripts)
+        return max(tx.end for tx in self.transcripts if tx.cds)
 
     def add(self, tx: Transcript) -> None:
         """Add a new transcript (isoform) to this gene."""
@@ -460,7 +460,9 @@ class Gene(BaseModel):
             tx.to_genepred_row(
                 tx.display_name(gene_id, ti, transcript_pattern)
             )
-            for ti, tx in enumerate(self.transcripts, start=1)
+            for ti, tx in enumerate(
+                (t for t in self.transcripts if t.cds), start=1,
+            )
         )
 
     def to_gtf_rows(
@@ -482,7 +484,9 @@ class Gene(BaseModel):
             str(self.start+1), str(self.end),
             ".", self.strand, ".", f'gene_id "{name}";',
         ])]
-        for ti, tx in enumerate(self.transcripts, start=1):
+        for ti, tx in enumerate(
+            (t for t in self.transcripts if t.cds), start=1,
+        ):
             rows.append(tx.to_gtf_rows(
                 source=source,
                 gene_id=name,
@@ -508,7 +512,9 @@ class Gene(BaseModel):
             str(self.start+1), str(self.end),
             ".", self.strand, ".", f"ID={name};Name={name}",
         ])]
-        for ti, tx in enumerate(self.transcripts, start=1):
+        for ti, tx in enumerate(
+            (t for t in self.transcripts if t.cds), start=1,
+        ):
             rows.append(tx.to_gff3_rows(
                 source=source,
                 gene_id=name,
@@ -732,11 +738,15 @@ class Annotation:
     @property
     def next_gene_id(self) -> int:
         """The counter value a gene appended now would be named after:
-        ``start_gene_id`` plus the number of genes currently held. Use
-        it as the ``start_gene_id`` of a following annotation to keep
-        numbering contiguous.
+        ``start_gene_id`` plus the number of genes currently held, not
+        counting genes without coding regions, which are not written.
+        Use it as the ``start_gene_id`` of a following annotation to
+        keep numbering contiguous.
         """
-        return self._start_gene_id + sum(1 for _ in self.genes())
+        return self._start_gene_id + sum(
+            1 for gene in self.genes()
+            if any(tx.cds for tx in gene.transcripts)
+        )
 
     def set_naming(
         self,
@@ -844,14 +854,13 @@ class Annotation:
     def to_genepred(self, path: Path | str, append: bool = False) -> None:
         """Write every transcript as one GenePred row per isoform."""
         with open(path, "a" if append else "w") as fh:
-            for gi, gene in enumerate(self.genes()):
-                gene_id = self._start_gene_id + gi
-                for ti, tx in enumerate(gene.transcripts, start=1):
-                    if len(tx.cds) == 0: continue
-                    name = tx.display_name(
-                        gene_id, ti, self._transcript_pattern
-                    )
-                    fh.write(tx.to_genepred_row(name) + "\n")
+            gene_id = self._start_gene_id
+            for gene in self.genes():
+                if not any(tx.cds for tx in gene.transcripts): continue
+                fh.write(gene.to_genepred_rows(
+                    gene_id, self._transcript_pattern,
+                ) + "\n")
+                gene_id += 1
 
     def to_gtf(
         self,
@@ -866,13 +875,16 @@ class Annotation:
         stay consistent with the other formats.
         """
         with open(path, "a" if append else "w") as fh:
-            for gi, gene in enumerate(self.genes()):
+            gene_id = self._start_gene_id
+            for gene in self.genes():
+                if not any(tx.cds for tx in gene.transcripts): continue
                 fh.write(gene.to_gtf_rows(
-                    gene_id=self._start_gene_id + gi,
+                    gene_id=gene_id,
                     source=source,
                     gene_pattern=self._gene_pattern,
                     transcript_pattern=self._transcript_pattern,
                 ) + "\n")
+                gene_id += 1
 
     def to_gff3(
         self,
@@ -887,13 +899,16 @@ class Annotation:
         with open(path, "a" if append else "w") as fh:
             if not append or not file_exists:
                 fh.write("##gff-version 3\n")
-            for gi, gene in enumerate(self.genes()):
+            gene_id = self._start_gene_id
+            for gene in self.genes():
+                if not any(tx.cds for tx in gene.transcripts): continue
                 fh.write(gene.to_gff3_rows(
-                    gene_id=self._start_gene_id + gi,
+                    gene_id=gene_id,
                     source=source,
                     gene_pattern=self._gene_pattern,
                     transcript_pattern=self._transcript_pattern,
                 ) + "\n")
+                gene_id += 1
 
     def sequence_to_file(
         self,
@@ -944,7 +959,10 @@ class Annotation:
             for seqanno in self:
                 sequence = fasta[seqanno.sequence]
                 for gene in seqanno.genes():
-                    for ti, tx in enumerate(gene.transcripts, start=1):
+                    if not any(tx.cds for tx in gene.transcripts): continue
+                    for ti, tx in enumerate(
+                        (t for t in gene.transcripts if t.cds), start=1,
+                    ):
                         if target == "coding":
                             seq = tx.coding_sequence(sequence).string()
                         elif target == "protein":
