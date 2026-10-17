@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from .create_codon_table import create_codon_table
 from .fasta import Fasta, Sequence
+from .start_stop_codons import get_start_codons
 
 T_Label = Literal["cds", "intron", "intergenic"]
 T_StrandLabel = tuple[T_Label, T_Label]
@@ -129,6 +130,7 @@ class Transcript(BaseModel):
         translation_table: int | None = None,
         drop_terminal_stop: bool = True,
         require_multiple_of_three: bool = False,
+        initiator_methionine: bool = False,
     ) -> str:
         """Translate the coding region of the transcript into
         amino acids according to the selected translation table.
@@ -140,10 +142,19 @@ class Transcript(BaseModel):
                 trailing '*' (common convention). Defaults to True.
             require_multiple_of_three (bool, optional): If true, raises
                 a ValueError if `len(CDS) % 3 != 0`. Defaults to False.
+            initiator_methionine (bool, optional): If true, a first
+                codon that is a start codon of the translation table is
+                translated as 'M', whatever amino acid it codes for
+                inside a gene (GTG, TTG, ... in bacteria). This is the
+                convention of NCBI and Prodigal protein files. Defaults
+                to False.
         """
         if translation_table is None:
             translation_table = 1
         codon_table = create_codon_table(translation_table)
+        start_codons = {
+            codon for codon, _ in get_start_codons(translation_table)
+        }
         cds = self.coding_sequence(sequence).string()
         if not cds: return ""
 
@@ -169,6 +180,8 @@ class Transcript(BaseModel):
                 aa.append(codon_table.get(codon, "X"))
 
         prot = "".join(aa)
+        if initiator_methionine and prot and cds_u[:3] in start_codons:
+            prot = "M" + prot[1:]
         if drop_terminal_stop and prot.endswith("*"):
             prot = prot[:-1]
         return prot
@@ -920,6 +933,7 @@ class Annotation:
         header_fn: Callable[[Gene, Transcript], str] | None = None,
         skip_empty: bool = True,
         translation_table: int | None = None,
+        initiator_methionine: bool = False,
     ) -> None:
         """For a given :class:`Fasta` object, write the coding or
         protein sequence to a given file that corresponds to this
@@ -940,6 +954,10 @@ class Annotation:
                 "{gene_id}|{tx_id}|{seqname}:{start}-{end}({strand})".
             skip_empty (bool, optional): If True, skips empty coding
                 sequences. Defaults to True.
+            initiator_methionine (bool, optional): For ``"protein"``,
+                write 'M' for a first codon that is a start codon of the
+                translation table, see :meth:`Transcript.protein_sequence`.
+                Defaults to False.
         """
         path = Path(path).expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -969,6 +987,7 @@ class Annotation:
                             seq = tx.protein_sequence(
                                 sequence,
                                 translation_table=translation_table,
+                                initiator_methionine=initiator_methionine,
                             )
 
                         if skip_empty and (seq is None or len(seq) == 0):
